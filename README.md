@@ -7,7 +7,7 @@
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen.svg)
 
 > A complete person detection, re-identification, and tracking system built as an AI/ML internship project.
-
+</div>
 ## 📋 Table of Contents
 - [Features](#-features)
 - [Performance](#-performance)
@@ -20,7 +20,7 @@
 - [Key Learnings](#-key-learnings)
 - [Future Improvements](#-future-improvements)
 
-</div>
+
 
 ---
 
@@ -90,42 +90,43 @@
 ---
 
 ## 📁 Project Structure
+## 📁 Project Structure
 
+```text
 persona_detection_final/
 │
 ├── 📂 phase1_detection/
-│ └── person_detector.py
+│   └── person_detector.py
 │
 ├── 📂 phase2_reid/
-│ ├── 📂 datasets/
-│ │ └── market1501.py # Dataset loader
-│ ├── 📂 models/
-│ │ └── reid_net.py # ReID network
-│ ├── 📂 losses/
-│ │ └── triplet_loss.py # Loss function
-│ ├── 📂 checkpoints/
-│ │ └── best_reid_model.pth # Trained model (24.6M params)
-│ ├── train_reid.py # Training script
-│ └── evaluation_results.json # Metrics
+│   ├── 📂 datasets/
+│   │   └── market1501.py       # Dataset loader
+│   ├── 📂 models/
+│   │   └── reid_net.py         # ReID network
+│   ├── 📂 losses/
+│   │   └── triplet_loss.py     # Loss function
+│   ├── 📂 checkpoints/
+│   │   └── best_reid_model.pth # Trained model (24.6M params)
+│   ├── train_reid.py           # Training script
+│   └── evaluation_results.json # Metrics
 │
 ├── 📂 phase3_tracking/
-│ ├── 📂 trackers/
-│ │ ├── kalman_filter.py # Motion prediction
-│ │ ├── track.py # Track management
-│ │ └── deepsort.py # Main tracker
-│ └── person_tracker.py # Complete pipeline
+│   ├── 📂 trackers/
+│   │   ├── kalman_filter.py    # Motion prediction
+│   │   ├── track.py            # Track management
+│   │   └── deepsort.py         # Main tracker
+│   └── person_tracker.py       # Complete pipeline
 │
 ├── 📂 results/
-│ └── tracking_result.mp4 # Demo video
+│   └── tracking_result.mp4     # Demo video
 │
 ├── 📂 reports/
-│ ├── final_project_report.txt
-│ ├── project_summary.json
-│ └── presentation_outline.txt
+│   ├── final_project_report.txt
+│   ├── project_summary.json
+│   └── presentation_outline.txt
 │
 └── README.md
-
-
+```
 ---
 
 ## 🛠 Installation
@@ -296,10 +297,10 @@ torch.save(checkpoint, 'drive/MyDrive/.../checkpoint.pth')
 ## 📈 Results Demo
 The system successfully:
 
-✅ Detects multiple persons in crowded scenes
-✅ Assigns unique IDs to each person
-✅ Maintains IDs across frames
-✅ Handles occlusions and re-appearances
+✅ Detects multiple persons in crowded scenes  
+✅ Assigns unique IDs to each person  
+✅ Maintains IDs across frames  
+✅ Handles occlusions and re-appearances  
 ✅ Processes video in real-time
 **Demo video**: results/tracking_result.mp4
 
@@ -313,13 +314,11 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 **DeepSORT** algorithm by Wojke et al.
 <div align="center">
 Status: ✅ PRODUCTION READY
-Built with ❤️ for AI/ML Internship
-
 
 </div>
 
 <div align="center">
-⭐ Star this repository if you find it helpful!
+⭐ Star this repository if you find it helpful!<br>
 Built with ❤️ as an AI/ML Internship Project
 
 </div>
