@@ -8,7 +8,8 @@
 
 > A complete person detection, re-identification, and tracking system built as an AI/ML internship project.
 </div>
----
+
+
 
 ## 📋 Table of Contents
 
