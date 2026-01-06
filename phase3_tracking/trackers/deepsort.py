@@ -1,7 +1,13 @@
-
 """
-DeepSORT Tracker - Main tracking algorithm
+DeepSORT Tracker
+
 Combines Kalman filter motion prediction with Re-ID appearance features
+for robust multi-object tracking.
+
+Algorithm:
+1. Predict new positions using Kalman filter
+2. Match detections to tracks using appearance + motion
+3. Update matched tracks, create new tracks, delete lost tracks
 """
 
 import numpy as np
@@ -12,7 +18,15 @@ from .track import Track, TrackState
 
 
 def iou(bbox1, bbox2):
-    """Compute IoU between two bounding boxes [x1, y1, x2, y2]"""
+    """
+    Compute Intersection over Union between two bounding boxes.
+    
+    Args:
+        bbox1, bbox2: Bounding boxes [x1, y1, x2, y2]
+        
+    Returns:
+        IoU score between 0 and 1
+    """
     x1 = max(bbox1[0], bbox2[0])
     y1 = max(bbox1[1], bbox2[1])
     x2 = min(bbox1[2], bbox2[2])
@@ -29,7 +43,16 @@ def iou(bbox1, bbox2):
 
 
 def cosine_distance(features1, features2):
-    """Compute cosine distance between feature sets"""
+    """
+    Compute cosine distance between feature sets.
+    
+    Args:
+        features1: List of feature vectors
+        features2: List of feature vectors
+        
+    Returns:
+        Minimum cosine distance (1 - max similarity)
+    """
     if len(features1) == 0 or len(features2) == 0:
         return 1.0
     
@@ -40,7 +63,7 @@ def cosine_distance(features1, features2):
     features1 = features1 / (np.linalg.norm(features1, axis=1, keepdims=True) + 1e-8)
     features2 = features2 / (np.linalg.norm(features2, axis=1, keepdims=True) + 1e-8)
     
-    # Compute cosine similarity
+    # Cosine similarity
     similarity = np.dot(features1, features2.T)
     
     # Return minimum distance (maximum similarity)
@@ -52,20 +75,19 @@ class DeepSORTTracker:
     DeepSORT multi-object tracker.
     
     Combines:
-    1. Kalman filter for motion prediction
-    2. Re-ID features for appearance matching
-    3. Hungarian algorithm for optimal assignment
+    - Kalman filter for motion prediction
+    - Re-ID features for appearance matching
+    - Hungarian algorithm for optimal assignment
+    
+    Args:
+        max_age: Maximum frames to keep track without detection
+        n_init: Consecutive detections needed to confirm track
+        max_iou_distance: Maximum IoU distance for matching
+        max_cosine_distance: Maximum cosine distance for Re-ID matching
     """
     
-    def __init__(self, max_age=30, n_init=3, max_iou_distance=0.7, 
+    def __init__(self, max_age=30, n_init=3, max_iou_distance=0.7,
                  max_cosine_distance=0.3):
-        """
-        Args:
-            max_age: Max frames to keep track without detection
-            n_init: Frames before track is confirmed
-            max_iou_distance: Max IoU distance for matching
-            max_cosine_distance: Max cosine distance for Re-ID matching
-        """
         self.max_age = max_age
         self.n_init = n_init
         self.max_iou_distance = max_iou_distance
@@ -80,13 +102,13 @@ class DeepSORTTracker:
         Update tracker with new detections.
         
         Args:
-            detections: List of [x1, y1, x2, y2, confidence] detections
-            features: List of Re-ID feature vectors (same length as detections)
+            detections: Array of [x1, y1, x2, y2, confidence] detections
+            features: List of Re-ID feature vectors
             
         Returns:
             List of (track_id, bbox) for confirmed tracks
         """
-        # Predict new locations of existing tracks
+        # Predict new positions
         for track in self.tracks:
             track.predict(self.kf)
         
@@ -100,28 +122,31 @@ class DeepSORTTracker:
             h = y2 - y1
             det_centers.append([cx, cy, w, h])
         
-        # Split tracks into confirmed and unconfirmed
+        # Split tracks
         confirmed_tracks = [t for t in self.tracks if t.is_confirmed()]
         unconfirmed_tracks = [t for t in self.tracks if t.is_tentative()]
         
-        # Match confirmed tracks using appearance + motion
+        # Match confirmed tracks with appearance + motion
         matches_a, unmatched_tracks_a, unmatched_detections = \
-            self._match_confirmed(confirmed_tracks, det_centers, features, detections)
+            self._match(confirmed_tracks, det_centers, features, detections)
         
-        # Match remaining tracks using IoU only
+        # Match unconfirmed tracks with IoU only
         matches_b, unmatched_tracks_b, unmatched_detections = \
-            self._match_unconfirmed(unconfirmed_tracks, det_centers, features, 
-                                   detections, unmatched_detections)
+            self._match_iou(unconfirmed_tracks, det_centers, detections,
+                           unmatched_detections)
         
         # Update matched tracks
-        for track_idx, det_idx in matches_a + matches_b:
-            if track_idx < len(confirmed_tracks):
-                track = confirmed_tracks[track_idx]
-            else:
-                track = unconfirmed_tracks[track_idx - len(confirmed_tracks)]
-            
-            feature = features[det_idx] if features is not None else None
-            track.update(self.kf, det_centers[det_idx], feature)
+        for track_idx, det_idx in matches_a:
+            feature = features[det_idx] if features else None
+            confirmed_tracks[track_idx].update(
+                self.kf, det_centers[det_idx], feature
+            )
+        
+        for track_idx, det_idx in matches_b:
+            feature = features[det_idx] if features else None
+            unconfirmed_tracks[track_idx].update(
+                self.kf, det_centers[det_idx], feature
+            )
         
         # Mark unmatched tracks as missed
         for track_idx in unmatched_tracks_a:
@@ -131,8 +156,10 @@ class DeepSORTTracker:
         
         # Create new tracks for unmatched detections
         for det_idx in unmatched_detections:
-            self._initiate_track(det_centers[det_idx], 
-                               features[det_idx] if features is not None else None)
+            self._create_track(
+                det_centers[det_idx],
+                features[det_idx] if features else None
+            )
         
         # Remove deleted tracks
         self.tracks = [t for t in self.tracks if not t.is_deleted()]
@@ -146,18 +173,18 @@ class DeepSORTTracker:
         
         return results
     
-    def _match_confirmed(self, tracks, detections, features, raw_detections):
-        """Match confirmed tracks using appearance and motion"""
+    def _match(self, tracks, detections, features, raw_detections):
+        """Match tracks using appearance and motion."""
         if len(tracks) == 0 or len(detections) == 0:
             return [], list(range(len(tracks))), list(range(len(detections)))
         
-        # Compute cost matrix
+        # Build cost matrix
         cost_matrix = np.zeros((len(tracks), len(detections)))
         
         for i, track in enumerate(tracks):
             for j, det in enumerate(detections):
-                # Appearance cost (cosine distance)
-                if features is not None and len(track.features) > 0:
+                # Appearance cost
+                if features and len(track.features) > 0:
                     appearance_cost = cosine_distance(track.features, [features[j]])
                 else:
                     appearance_cost = 0
@@ -170,7 +197,7 @@ class DeepSORTTracker:
                 # Combined cost
                 cost_matrix[i, j] = 0.5 * appearance_cost + 0.5 * iou_cost
         
-        # Apply gating
+        # Gate unreachable assignments
         cost_matrix[cost_matrix > self.max_cosine_distance] = 1e5
         
         # Hungarian algorithm
@@ -188,13 +215,12 @@ class DeepSORTTracker:
         
         return matches, unmatched_tracks, unmatched_detections
     
-    def _match_unconfirmed(self, tracks, detections, features, raw_detections, 
-                          detection_indices):
-        """Match unconfirmed tracks using IoU only"""
+    def _match_iou(self, tracks, detections, raw_detections, detection_indices):
+        """Match using IoU only (for unconfirmed tracks)."""
         if len(tracks) == 0 or len(detection_indices) == 0:
-            return [], list(range(len(tracks))), detection_indices
+            return [], list(range(len(tracks))), list(detection_indices)
         
-        # Compute IoU matrix
+        # IoU cost matrix
         iou_matrix = np.zeros((len(tracks), len(detection_indices)))
         
         for i, track in enumerate(tracks):
@@ -203,11 +229,9 @@ class DeepSORTTracker:
                 det_bbox = raw_detections[det_idx][:4]
                 iou_matrix[i, j] = iou(track_bbox, det_bbox)
         
-        # Convert to cost (1 - IoU)
         cost_matrix = 1 - iou_matrix
         cost_matrix[cost_matrix > self.max_iou_distance] = 1e5
         
-        # Hungarian algorithm
         row_indices, col_indices = linear_sum_assignment(cost_matrix)
         
         matches = []
@@ -217,14 +241,14 @@ class DeepSORTTracker:
         for row, col in zip(row_indices, col_indices):
             if cost_matrix[row, col] < 1e5:
                 det_idx = detection_indices[col]
-                matches.append((row + len([t for t in self.tracks if t.is_confirmed()]), det_idx))
+                matches.append((row, det_idx))
                 unmatched_tracks.remove(row)
                 unmatched_detections.remove(det_idx)
         
         return matches, unmatched_tracks, unmatched_detections
     
-    def _initiate_track(self, detection, feature):
-        """Create new track"""
+    def _create_track(self, detection, feature):
+        """Create a new track."""
         mean, covariance = self.kf.initiate(detection)
         self.tracks.append(Track(
             mean, covariance, self._next_id, self.n_init, self.max_age, feature
