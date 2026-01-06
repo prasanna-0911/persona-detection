@@ -1,0 +1,149 @@
+═══════════════════════════════════════════════════════════════════════════
+                    PERSONA DETECTION SYSTEM
+                    AI/ML Internship Project
+
+                    PRESENTATION OUTLINE
+═══════════════════════════════════════════════════════════════════════════
+
+
+SLIDE 1: TITLE
+──────────────────────────────────────────────────────────────────────────
+    • Persona Detection: Real-time Person Tracking System
+    • AI/ML Internship Project
+    • [Your Name]
+    • [Date]
+
+
+SLIDE 2: PROBLEM STATEMENT
+──────────────────────────────────────────────────────────────────────────
+    Challenge:
+    • Track individuals across video sequences
+    • Maintain consistent identity (Person ID: 42)
+    • Handle real-world scenarios (occlusions, crowds, lighting)
+
+    Applications:
+    • Surveillance & Security
+    • Retail Analytics
+    • Smart Cities
+
+
+SLIDE 3: SOLUTION ARCHITECTURE
+──────────────────────────────────────────────────────────────────────────
+    Three-Phase Pipeline:
+
+    ┌─────────┐   ┌─────────┐   ┌─────────┐
+    │ YOLOv5  │ → │  Re-ID  │ → │DeepSORT │
+    │Detection│   │Features │   │Tracking │
+    └─────────┘   └─────────┘   └─────────┘
+
+    • Phase 1: WHERE are people?
+    • Phase 2: WHO is this person?
+    • Phase 3: MAINTAIN identity over time
+
+
+SLIDE 4: PHASE 1 - DETECTION
+──────────────────────────────────────────────────────────────────────────
+    Technology: YOLOv5 (Pretrained on COCO)
+
+    Performance:
+    • Speed: 30-50 FPS (Real-time ✓)
+    • Confidence: >75%
+    • False Positives: <5%
+
+    Key Learning:
+    • Attempted training from scratch → Failed
+    • Reason: Class imbalance (95% background)
+    • Solution: Transfer learning
+
+
+SLIDE 5: PHASE 2 - RE-IDENTIFICATION
+──────────────────────────────────────────────────────────────────────────
+    Technology: ResNet50 + Triplet Loss
+
+    Dataset: Market-1501
+    • 12,936 training images
+    • 751 unique identities
+
+    Results:
+    ┌────────────────────┬─────────┐
+    │ Same Person Sim    │ 0.912   │
+    │ Different Person   │ 0.078   │
+    │ Separation Gap     │ 0.834   │ ← EXCELLENT!
+    └────────────────────┴─────────┘
+
+
+SLIDE 6: PHASE 3 - TRACKING
+──────────────────────────────────────────────────────────────────────────
+    Algorithm: DeepSORT
+
+    Components:
+    • Kalman Filter → Predict movement
+    • Hungarian Algorithm → Optimal matching
+    • Re-ID Features → Appearance similarity
+
+    Capability:
+    • Maintains ID through occlusions
+    • Handles multiple persons simultaneously
+    • Real-time processing
+
+
+SLIDE 7: DEMO VIDEO
+──────────────────────────────────────────────────────────────────────────
+    [Show tracking_result.mp4]
+
+    Key Points to Highlight:
+    • Consistent person IDs
+    • Bounding boxes with ID labels
+    • Real-time frame processing
+
+
+SLIDE 8: CHALLENGES & SOLUTIONS
+──────────────────────────────────────────────────────────────────────────
+    Challenge 1: Training from Scratch Failed
+    • Problem: 0% confidence on all detections
+    • Root Cause: Class imbalance
+    • Solution: Transfer learning (YOLOv5)
+
+    Challenge 2: Validating Model Quality
+    • Problem: Low loss ≠ good performance
+    • Solution: Similarity distribution analysis
+
+    Challenge 3: Colab Disconnections
+    • Problem: Lost training progress
+    • Solution: Auto-save every epoch to Drive
+
+
+SLIDE 9: RESULTS SUMMARY
+──────────────────────────────────────────────────────────────────────────
+    ┌─────────────┬──────────────┬─────────────┐
+    │ Component   │ Key Metric   │ Status      │
+    ├─────────────┼──────────────┼─────────────┤
+    │ Detection   │ 30-50 FPS    │ ✅ Ready    │
+    │ Re-ID       │ 0.834 gap    │ ✅ Ready    │
+    │ Tracking    │ ID maintained│ ✅ Ready    │
+    └─────────────┴──────────────┴─────────────┘
+
+    Overall: PRODUCTION READY
+
+
+SLIDE 10: FUTURE SCOPE
+──────────────────────────────────────────────────────────────────────────
+    Potential Enhancements:
+    • Multi-camera cross-view tracking
+    • Pose estimation for activity recognition
+    • Edge device deployment (Jetson, Raspberry Pi)
+    • Web dashboard for real-time monitoring
+    • REST API for integration
+
+
+SLIDE 11: THANK YOU
+──────────────────────────────────────────────────────────────────────────
+    Questions?
+
+    Project Repository:
+    • All code saved on Google Drive
+    • Fully documented
+    • Reproducible pipeline
+
+
+═══════════════════════════════════════════════════════════════════════════

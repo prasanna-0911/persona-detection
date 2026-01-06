@@ -1,0 +1,24 @@
+# ══════════════════════════════════════════════════════════════
+# Persona Detection Project - Requirements
+# ══════════════════════════════════════════════════════════════
+
+# Core
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Detection
+ultralytics>=8.0.0
+
+# Image/Video Processing
+opencv-python>=4.8.0
+Pillow>=9.0.0
+
+# Scientific Computing
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Utilities
+tqdm>=4.65.0
+
+# Optional: For visualization
+matplotlib>=3.7.0
