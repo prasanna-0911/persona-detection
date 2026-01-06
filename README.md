@@ -8,7 +8,10 @@
 
 > A complete person detection, re-identification, and tracking system built as an AI/ML internship project.
 </div>
+---
+
 ## 📋 Table of Contents
+
 - [Features](#-features)
 - [Performance](#-performance)
 - [Architecture](#-architecture)
@@ -19,8 +22,6 @@
 - [Technologies](#-technologies)
 - [Key Learnings](#-key-learnings)
 - [Future Improvements](#-future-improvements)
-
-
 
 ---
 
@@ -309,9 +310,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 
 ## 🙏 Acknowledgments
-**YOLOv5** by Ultralytics
-**Market-1501** dataset by Zheng et al.
-**DeepSORT** algorithm by Wojke et al.
+**YOLOv5** by Ultralytics  
+**Market-1501** dataset by Zheng et al.  
+**DeepSORT** algorithm by Wojke et al.  
 <div align="center">
 Status: ✅ PRODUCTION READY
 
