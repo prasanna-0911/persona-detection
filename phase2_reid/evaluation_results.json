@@ -1,0 +1,8 @@
+{
+  "same_person_mean": 0.9119459146261215,
+  "same_person_std": 0.07185157627593197,
+  "diff_person_mean": 0.07776969078928232,
+  "diff_person_std": 0.31318432161503335,
+  "separation": 0.8341762238368392,
+  "status": "PRODUCTION READY"
+}

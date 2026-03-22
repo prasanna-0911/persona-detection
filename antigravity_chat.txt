@@ -1,0 +1,135 @@
+
+Here's the complete, detailed step-by-step plan for YOLO fine-tuning:
+
+YOLO Fine-Tuning Plan
+Phase 1 — Download All Datasets
+What to download and where:
+
+Dataset	Link	Format	Size
+NightOwls	nightowls-dataset.org	COCO JSON	~135GB (downloading)
+COCO 2017	cocodataset.org/#download	COCO JSON	~20GB (train+val+annotations)
+CrowdHuman	crowdhuman.org	ODGT	~30GB
+CityPersons	Cityscapes portal (cityscapes-dataset.com)	JSON	~6GB
+NightOwls is already downloading. For COCO 2017, download: train2017.zip + val2017.zip + annotations_trainval2017.zip
+
+Phase 2 — Convert All Datasets to YOLO Format
+YOLO expects this exact format:
+
+dataset/
+├── images/
+│   ├── train/   ← all training images (.jpg)
+│   └── val/     ← all validation images (.jpg)
+└── labels/
+    ├── train/   ← one .txt per image
+    └── val/
+Each 
+
+.txt
+ file contains one line per person:
+
+0 x_center y_center width height
+(class 0 = person, all values normalized 0–1)
+
+Conversion details per dataset:
+
+COCO 2017 — Ultralytics has a built-in auto-converter. Zero work needed
+CrowdHuman — Uses .odgt format → need a conversion script (we'll write this)
+CityPersons — JSON annotations → need a conversion script (we'll write this)
+NightOwls — COCO JSON format → same converter as COCO
+Phase 3 — Merge All Datasets
+After converting, merge everything into one unified directory:
+
+merged_dataset/
+├── images/
+│   ├── train/   ← COCO + NightOwls + CrowdHuman + CityPersons combined
+│   └── val/     ← 10–15% from each dataset
+└── labels/
+    ├── train/
+    └── val/
+Approximate combined size:
+
+Dataset	Train images
+COCO 2017 (persons only)	~64k
+NightOwls	~280k
+CrowdHuman	~15k
+CityPersons	~3k
+Total	~362k images
+Phase 4 — Create dataset.yaml
+yaml
+path: ./merged_dataset
+train: images/train
+val: images/val
+nc: 1
+names:
+  0: person
+Phase 5 — Training Configuration
+Key parameters for fine-tuning (not retraining):
+
+Parameter	Value	Why
+Starting weights	yolov8s.pt	Fine-tune, not scratch
+epochs	50	enough for fine-tune
+batch	32–64	adjust to GPU VRAM
+imgsz	640	standard YOLO input size
+lr0	0.001	conservative for fine-tune
+lrf	0.01	final lr = lr0 × lrf
+freeze	10	freeze first 10 backbone layers (protects core features)
+device	cuda	use GPU
+classes	[0]	person only
+patience	20	early stopping if no improvement in 20 epochs
+save_period	5	save checkpoint every 5 epochs
+Phase 6 — Run Training
+python
+from ultralytics import YOLO
+model = YOLO('yolov8s.pt')   # start from pretrained
+model.train(
+    data='dataset.yaml',
+    epochs=50,
+    batch=32,
+    imgsz=640,
+    lr0=0.001,
+    lrf=0.01,
+    freeze=10,          # freeze first 10 backbone layers
+    device='cuda',
+    classes=[0],
+    patience=20,
+    save_period=5,
+    project='runs/detect',
+    name='yolov8s_persona_custom',
+    exist_ok=True
+)
+Output saved to: runs/detect/yolov8s_persona_custom/weights/best.pt
+
+Phase 7 — Evaluate the Model
+After training, evaluate on your nighttime footage specifically:
+
+python
+model = YOLO('runs/detect/yolov8s_persona_custom/weights/best.pt')
+metrics = model.val(data='dataset.yaml', classes=[0])
+print(metrics.box.map50)   # mAP50 — main accuracy metric
+Also visually test on a real nighttime CCTV clip:
+
+python
+results = model('your_night_footage.mp4', conf=0.25, classes=[0])
+results[0].save('night_result.jpg')
+Phase 8 — Deploy in the Project
+Replace the model path in 
+
+multi_camera_tracker.py
+:
+
+python
+# Line ~663 — change from:
+local_tracker = YOLO('yolov8s.pt')
+# To:
+local_tracker = YOLO('runs/detect/yolov8s_persona_custom/weights/best.pt')
+Full Order of Work
+1. Finish downloading NightOwls
+2. Download COCO 2017 + CrowdHuman + CityPersons
+3. Write/run conversion scripts (CrowdHuman + CityPersons → YOLO format)
+4. Merge all datasets into one folder
+5. Create dataset.yaml
+6. Run training (~5-12 hours on modern GPU)
+7. Evaluate mAP on val set
+8. Test on real nighttime footage
+9. Deploy best.pt into the project
+Ready to start? The first practical step we need to code is the conversion scripts for CrowdHuman and CityPersons (Step 3), since COCO and NightOwls are already in COCO JSON format and Ultralytics handles that automatically. Shall I write those scripts?
