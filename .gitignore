@@ -99,3 +99,9 @@ demo/
 docs/
 results/
 reports/
+
+
+*.txt
+non.code-profile
+*.pdf
+training_pc_guide.md
