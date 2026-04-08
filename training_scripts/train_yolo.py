@@ -128,7 +128,9 @@ def train_rotation(
     """Train one rotation. Returns a summary dict."""
 
     is_first = (rotation_idx == 0)
-    lr0      = DEFAULT_LR0_FIRST if is_first else DEFAULT_LR0_LATER
+    # Use CLI --lr0 if provided, otherwise fall back to the built-in defaults
+    lr0      = (args.lr0 if (is_first and args.lr0 is not None) else
+                DEFAULT_LR0_FIRST if is_first else DEFAULT_LR0_LATER)
     freeze   = args.freeze if is_first else 0   # only freeze backbone on first rotation
 
     print(f"\n{'='*60}")
@@ -220,7 +222,9 @@ def main():
     parser.add_argument("--lrf",         type=float, default=DEFAULT_LRF)
     parser.add_argument("--freeze",      type=int,   default=DEFAULT_FREEZE,
                         help="Backbone layers to freeze in rotation 0 (default: 10)")
-    parser.add_argument("--patience",    type=int,   default=DEFAULT_PATIENCE)
+    parser.add_argument("--lr0",         type=float, default=None,
+                        help="Override lr for rotation 0 (default: 0.001). Later rotations always use 0.0005.")
+
     parser.add_argument("--save-period", type=int,   default=DEFAULT_SAVE_PERIOD)
     parser.add_argument("--workers",     type=int,   default=DEFAULT_WORKERS)
     parser.add_argument("--device",      default="cuda",

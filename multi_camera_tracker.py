@@ -405,10 +405,15 @@ class MultiCameraTracker:
     """
     
     def __init__(
-        self, 
+        self,
         reid_model_path: str,
         device: str = 'cuda',
-        similarity_threshold: float = 0.7
+        similarity_threshold: float = 0.7,
+        yolo_model_path: str = 'yolov8s.pt',
+        day_model_path: str = 'yolov8s.pt',
+        night_model_path: str = 'runs/detect/yolov8s_rot0/weights/best.pt',
+        conf: float = 0.45,
+        imgsz: int = 960
     ):
         """
         Initialize multi-camera tracker.
@@ -420,7 +425,29 @@ class MultiCameraTracker:
         """
         self.device = torch.device(device if torch.cuda.is_available() else 'cpu')
         print(f"🖥️  Device: {self.device}")
-        
+
+        # --- GPU VRAM check & imgsz safety ---
+        self.imgsz = imgsz
+        if torch.cuda.is_available():
+            vram_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+            print(f"   GPU VRAM : {vram_gb:.1f} GB")
+            if vram_gb < 6.0:
+                print(f"\n⚠️  WARNING: Only {vram_gb:.1f} GB VRAM detected.")
+                print(f"   Recommended minimum for imgsz=960: 6 GB")
+                try:
+                    resp = input("   Drop imgsz from 960 \u2192 640 for safety? (y/n): ").strip().lower()
+                except EOFError:
+                    resp = 'y'
+                if resp == 'y':
+                    self.imgsz = 640
+                    print("   \u2705 imgsz dropped to 640.")
+
+        # Adaptive day / night model paths (Saved for potential future use)
+        self.yolo_model_path  = yolo_model_path
+        self.day_model_path   = day_model_path
+        self.night_model_path = night_model_path
+        self.conf  = conf
+
         # YOLO detector is now loaded per-camera in process_source
         # to isolate BoT-SORT tracking states between cameras.
         
@@ -487,9 +514,22 @@ class MultiCameraTracker:
         
         return features
 
-    def enhance_frame_lowlight(self, frame: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def _measure_brightness(frame: np.ndarray) -> float:
+        """Return mean pixel brightness (0–255) of a BGR frame.
+        Used to auto-select the day/night YOLO model and scale CLAHE strength."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return float(np.mean(gray))
+
+    def enhance_frame_lowlight(self, frame: np.ndarray,
+                               brightness: float = None) -> np.ndarray:
         """
-        Enhance a dark / low-light frame before passing to YOLO.
+        Adaptive low-light enhancement before passing to YOLO.
+
+        Brightness-gated pipeline:
+          > 90  (daytime)  → skip CLAHE entirely (prevents afternoon flickering)
+          50-90 (twilight) → light CLAHE only (clipLimit=1.5)
+          < 50  (night)    → full CLAHE (clipLimit=3.0) + gamma correction
 
         Two-stage pipeline:
         1. CLAHE on the L channel of LAB colour space:
@@ -500,31 +540,42 @@ class MultiCameraTracker:
 
         The original frame is NOT modified; a new frame is returned.
         """
-        # --- CLAHE on LAB L-channel ---
+        if brightness is None:
+            brightness = self._measure_brightness(frame)
+
+        # Bright scenes: skip all enhancement — eliminates CLAHE flicker on daytime footage
+        if brightness > 90:
+            return frame
+
+        # Scale CLAHE aggressiveness to darkness level
+        clip_limit = 1.5 if brightness > 50 else 3.0
+
+        # --- Adaptive CLAHE on LAB L-channel ---
         lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
         l_ch, a_ch, b_ch = cv2.split(lab)
-        # clipLimit=3.0, tileGridSize=(8,8) are tuned for CCTV dark footage
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
         l_ch = clahe.apply(l_ch)
         enhanced = cv2.merge([l_ch, a_ch, b_ch])
         enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
 
-        # --- Gamma correction to lift dark shadows ---
-        gamma = 0.6          # < 1.0 brightens; 0.6 is a strong lift for night scenes
-        inv_gamma = 1.0 / gamma
-        table = np.array([
-            ((i / 255.0) ** inv_gamma) * 255
-            for i in range(256)
-        ], dtype=np.uint8)
-        enhanced = cv2.LUT(enhanced, table)
+        # Gamma correction only for truly dark scenes (brightness < 50)
+        if brightness < 50:
+            gamma     = 0.6
+            inv_gamma = 1.0 / gamma
+            table = np.array(
+                [((i / 255.0) ** inv_gamma) * 255 for i in range(256)],
+                dtype=np.uint8
+            )
+            enhanced = cv2.LUT(enhanced, table)
 
         return enhanced
     
     def process_frame(
-        self, 
-        frame: np.ndarray, 
+        self,
+        frame: np.ndarray,
         camera_name: str,
-        local_tracker: YOLO
+        local_tracker: YOLO,
+        brightness: float = None
     ) -> Tuple[List[Tuple[int, np.ndarray]], np.ndarray]:
         """
         Process a single frame.
@@ -538,13 +589,22 @@ class MultiCameraTracker:
             tracks: List of (global_id, bbox) tuples
             annotated_frame: Frame with visualizations
         """
-        # Low-light enhancement: apply CLAHE + gamma before YOLO so the model
-        # can see people in shadows and dark street-light conditions.
-        enhanced_frame = self.enhance_frame_lowlight(frame)
+        # Adaptive CLAHE: strength auto-scaled to brightness (skipped on bright frames)
+        if brightness is None:
+            brightness = self._measure_brightness(frame)
+        enhanced_frame = self.enhance_frame_lowlight(frame, brightness)
 
         # Track persons using built-in BoT-SORT
         # conf=0.25: lower than default 0.5 so dim/dark detections aren't discarded
-        results = local_tracker.track(enhanced_frame, persist=True, tracker="botsort.yaml", classes=[0], conf=0.25, verbose=False)
+        results = local_tracker.track(
+            enhanced_frame,
+            persist=True,
+            tracker="botsort.yaml",
+            classes=[0],
+            conf=self.conf,
+            imgsz=self.imgsz,
+            verbose=False
+        )
         
         detections = []
         local_tracks = []
@@ -686,11 +746,32 @@ class MultiCameraTracker:
                 print(f"   Output: {avi_output_path}")
                 print(f"   Output FPS: {output_fps}")
         
-        # Initialize isolated YOLO BoT-SORT tracker for this camera stream.
-        # yolov8s (small) is used instead of yolov8n (nano) — significantly
-        # better detection in hard conditions (low light, small/occluded persons)
-        # with only ~2× more compute; acceptable on a GPU.
-        local_tracker = YOLO('yolov8s.pt')
+        # -----------------------------------------------------------------
+        # [RESERVED FOR FUTURE USE] Adaptive Day / Night model switching
+        # -----------------------------------------------------------------
+        # If extreme darkness requires returning to a dual-model architecture,
+        # uncomment the block below and the switching logic in the processing loop.
+        #
+        # _SWITCH_TO_NIGHT = 70    # go night if brightness drops below this
+        # _SWITCH_TO_DAY   = 90    # go day  if brightness rises above this
+        # _CHECK_EVERY     = 90    # re-evaluate every N frames
+        # _HYSTERESIS      = 2     # consecutive threshold-crossing checks before switching
+        #
+        # _current_mode   = 'day'
+        # _pending_mode   = 'day'
+        # _pending_count  = 0
+        # _brightness_now = 128.0  # assume bright until first measurement
+        #
+        # print(f"   DAY   model : {self.day_model_path}")
+        # print(f"   NIGHT model : {self.night_model_path}")
+        # print(f"   Conf={self.conf}  ImgSz={self.imgsz}")
+        # print("   Starting in DAY mode (auto-switches based on brightness)")
+        # local_tracker = YOLO(self.day_model_path)
+        # -----------------------------------------------------------------
+
+        print(f"   Loading YOLO fallback: {self.yolo_model_path}")
+        print(f"   Conf={self.conf}  ImgSz={self.imgsz}")
+        local_tracker = YOLO(self.yolo_model_path)
         
         # Processing statistics
         stats = {
@@ -742,9 +823,39 @@ class MultiCameraTracker:
                     else:
                         break  # End of video file
                 
-                # Process frame
+                # Measure brightness once per frame (currently used for CLAHE scaling)
+                _brightness_now = self._measure_brightness(frame)
+
+                # -----------------------------------------------------------------
+                # [RESERVED FOR FUTURE USE] Adaptive model switching
+                # -----------------------------------------------------------------
+                # if stats['frames_processed'] % _CHECK_EVERY == 0 and stats['frames_processed'] > 0:
+                #     if _brightness_now < _SWITCH_TO_NIGHT:
+                #         _candidate = 'night'
+                #     elif _brightness_now > _SWITCH_TO_DAY:
+                #         _candidate = 'day'
+                #     else:
+                #         _candidate = _current_mode  # hysteresis zone — hold current mode
+                #
+                #     if _candidate == _pending_mode:
+                #         _pending_count += 1
+                #     else:
+                #         _pending_mode  = _candidate
+                #         _pending_count = 1
+                #
+                #     if _pending_count >= _HYSTERESIS and _candidate != _current_mode:
+                #         _current_mode  = _candidate
+                #         _pending_count = 0
+                #         _model_path = (self.day_model_path if _current_mode == 'day'
+                #                        else self.night_model_path)
+                #         print(f"\n🔄  Brightness={_brightness_now:.0f} → "
+                #               f"Switching to {_current_mode.upper()} model: {_model_path}")
+                #         local_tracker = YOLO(_model_path)
+                # -----------------------------------------------------------------
+
+                # Process frame (pass pre-computed brightness so CLAHE doesn't re-measure)
                 tracks, annotated_frame = self.process_frame(
-                    frame, camera_name, local_tracker
+                    frame, camera_name, local_tracker, brightness=_brightness_now
                 )
                 
                 # Update statistics

@@ -71,12 +71,28 @@ Examples:
     parser.add_argument('--camera-name', type=str, default='Camera_1', help='Camera name')
     parser.add_argument('--similarity-threshold', type=float, default=0.80, 
                        help='Cross-camera matching threshold (0-1)')
-    
-    # Model options
+    # Re-ID model option
     parser.add_argument('--model', type=str, 
                        default='phase2_reid/checkpoints/best_reid_model.pth',
                        help='Path to Re-ID model')
+
+    # Detection model options
+    parser.add_argument('--yolo-model', type=str,
+                       default='yolov8s.pt',
+                       help='YOLO model to use (default: yolov8s.pt)')
+    parser.add_argument('--day-model', type=str,
+                       default='yolov8s.pt',
+                       help='YOLO model for daytime/bright scenes (default: yolov8s.pt)')
+    parser.add_argument('--night-model', type=str,
+                       default='runs/detect/yolov8s_rot0/weights/best.pt',
+                       help='YOLO model for nighttime/dark scenes (default: fine-tuned best.pt)')
     parser.add_argument('--device', type=str, default='cuda', help='Device (cuda/cpu)')
+
+    # Detection tuning options
+    parser.add_argument('--conf', type=float, default=0.45,
+                       help='YOLO confidence threshold (0.0-1.0). Lower = more detections.')
+    parser.add_argument('--imgsz', type=int, default=960,
+                       help='YOLO inference image size. 960 recommended for nighttime.')
     
     args = parser.parse_args()
     
@@ -92,10 +108,20 @@ Examples:
     
     # Initialize tracker
     print("🚀 Initializing Multi-Camera Tracker...")
+    print(f"   YOLO model : {args.yolo_model}")
+    print(f"   Day  model : {args.day_model}")
+    print(f"   Night model: {args.night_model}")
+    print(f"   Conf       : {args.conf}")
+    print(f"   Img size   : {args.imgsz}")
     tracker = MultiCameraTracker(
         reid_model_path=args.model,
         device=args.device,
-        similarity_threshold=args.similarity_threshold
+        similarity_threshold=args.similarity_threshold,
+        yolo_model_path=args.yolo_model,
+        day_model_path=args.day_model,
+        night_model_path=args.night_model,
+        conf=args.conf,
+        imgsz=args.imgsz
     )
     
     # Process based on mode
