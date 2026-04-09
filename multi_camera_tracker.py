@@ -74,6 +74,34 @@ sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'phase2_reid'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'phase3_tracking'))
 
+# OSNet backend (Option B — industry-standard pre-trained Re-ID)
+#
+# Two torchreid versions exist with DIFFERENT package structures:
+#   Source install:  torchreid.utils.FeatureExtractor          (correct)
+#   PyPI install:    torchreid.reid.utils.FeatureExtractor      (fallback)
+#
+# Recommended install (always works):
+#   pip install git+https://github.com/KaiyangZhou/deep-person-reid.git
+_TORCHREID_AVAILABLE = False
+_TORCHREID_IMPORT_ERROR = None
+
+# Try 1: official source install path (KaiyangZhou/deep-person-reid)
+try:
+    from torchreid.utils import FeatureExtractor as OsNetExtractor
+    _TORCHREID_AVAILABLE = True
+except Exception as _e1:
+    # Try 2: PyPI version path (torchreid on PyPI has different namespace)
+    try:
+        from torchreid.reid.utils import FeatureExtractor as OsNetExtractor
+        _TORCHREID_AVAILABLE = True
+    except Exception as _e2:
+        _TORCHREID_AVAILABLE = False
+        _TORCHREID_IMPORT_ERROR = (
+            f"Path 1 (torchreid.utils): {type(_e1).__name__}: {_e1}\n"
+            f"Path 2 (torchreid.reid.utils): {type(_e2).__name__}: {_e2}"
+        )
+
+# Custom model backend (backward compatible with project-trained weights)
 from models.reid_net import ReIDNetwork
 # DeepSORTTracker removed; using Ultralytics BoT-SORT natively
 from ultralytics import YOLO
@@ -150,7 +178,8 @@ class GlobalPersonGallery:
         local_track_id: int, 
         feature: np.ndarray, 
         camera_name: str,
-        active_local_ids: set
+        active_local_ids: set,
+        update_gallery: bool = True
     ) -> int:
         """
         Find existing global ID or create new one.
@@ -160,6 +189,10 @@ class GlobalPersonGallery:
             feature: Re-ID feature vector
             camera_name: Name of the camera
             active_local_ids: Set of all local track IDs actively detected in this frame
+            update_gallery: If False, do NOT add this embedding to existing gallery
+                entries. Used for edge/partial detections whose noisy features
+                would corrupt gallery entries. New entries are still created
+                (so the track is visible), but existing entries are not polluted.
             
         Returns:
             Global ID for this person
@@ -176,51 +209,81 @@ class GlobalPersonGallery:
             # Check if we already have a mapping for this local track
             if local_track_id in self.local_to_global[camera_name]:
                 global_id = self.local_to_global[camera_name][local_track_id]
-                # Update features
-                if global_id in self.persons:
+                # Only update gallery features if this is a stable (non-edge) detection
+                if global_id in self.persons and update_gallery:
                     self.persons[global_id].add_feature(feature, camera_name)
                 return global_id
             
-            # Search for matching person in gallery
+            # --- New track: search gallery using best-of-N individual similarity ---
+            # WHY best-of-N instead of mean-embedding:
+            #   The mean of 20+ embeddings from different poses/viewpoints drifts
+            #   away from any single frame's embedding, causing both false positives
+            #   (wrong cross-camera matches) and false negatives (same person missed).
+            #   Comparing against INDIVIDUAL stored embeddings finds the single best
+            #   matching view, which is far more robust.
             best_match_id = None
             best_similarity = 0
             
             for global_id, person in self.persons.items():
-                # CRITICAL: Do not merge with a Global ID that is already assigned
-                # to another DIFFERENT person actively standing in this exact camera frame!
+                # Do not merge with a Global ID already taken in this frame
                 if global_id in active_global_ids_in_camera:
                     continue
-
-                avg_feature = person.get_average_feature()
-                if avg_feature is None:
+                if not person.features:
                     continue
                 
-                similarity = self._compute_similarity(feature, avg_feature)
+                # Best-of-N: compare query against each recent individual embedding
+                similarity = self._compute_best_similarity(feature, person)
                 
                 if similarity > best_similarity and similarity >= self.similarity_threshold:
                     best_similarity = similarity
                     best_match_id = global_id
             
             if best_match_id is not None:
-                # Found a match - use existing global ID
-                self.persons[best_match_id].add_feature(feature, camera_name)
+                # Found a match — use existing global ID
+                # Only update the gallery if detection is stable (not at frame edge)
+                if update_gallery:
+                    self.persons[best_match_id].add_feature(feature, camera_name)
                 self.local_to_global[camera_name][local_track_id] = best_match_id
                 return best_match_id
             else:
-                # No match - create new global ID
+                # No match — create new gallery entry
+                # Always add the feature to new entries (needed to make them matchable)
                 new_global_id = self._create_new_person(feature, camera_name)
                 self.local_to_global[camera_name][local_track_id] = new_global_id
                 return new_global_id
     
     def _compute_similarity(self, feature1: np.ndarray, feature2: np.ndarray) -> float:
         """Compute cosine similarity between two features."""
-        # Normalize
         f1 = feature1 / (np.linalg.norm(feature1) + 1e-8)
         f2 = feature2 / (np.linalg.norm(feature2) + 1e-8)
-        
-        # Cosine similarity
-        similarity = np.dot(f1, f2)
-        return float(similarity)
+        return float(np.dot(f1, f2))
+
+    def _compute_best_similarity(self, query: np.ndarray, person: PersonRecord) -> float:
+        """
+        Return the MAXIMUM cosine similarity between `query` and any of the
+        person's individual stored embeddings (instead of their mean).
+
+        Why best-of-N instead of mean-embedding:
+          - Mean of 20 embeddings from mixed viewpoints/poses drifts off the
+            unit hypersphere, degrading discriminability.
+          - A single GOOD embedding at the right angle gives 0.90+ similarity
+            even when the mean would only score 0.60.
+          - This prevents gallery drift from causing wrong cross-camera matches
+            and same-camera identity switches.
+
+        Only the most recent 15 embeddings are checked to avoid stale views
+        from minutes ago influencing present matches.
+        """
+        if not person.features:
+            return 0.0
+        q = query / (np.linalg.norm(query) + 1e-8)
+        max_sim = 0.0
+        for feat in person.features[-15:]:
+            f = feat / (np.linalg.norm(feat) + 1e-8)
+            sim = float(np.dot(q, f))
+            if sim > max_sim:
+                max_sim = sim
+        return max_sim
     
     def _create_new_person(self, feature: np.ndarray, camera_name: str) -> int:
         """Create a new person record."""
@@ -413,7 +476,8 @@ class MultiCameraTracker:
         day_model_path: str = 'yolov8s.pt',
         night_model_path: str = 'runs/detect/yolov8s_rot0/weights/best.pt',
         conf: float = 0.45,
-        imgsz: int = 960
+        imgsz: int = 960,
+        botsort_cfg: str = 'botsort_custom.yaml'
     ):
         """
         Initialize multi-camera tracker.
@@ -446,28 +510,60 @@ class MultiCameraTracker:
         self.yolo_model_path  = yolo_model_path
         self.day_model_path   = day_model_path
         self.night_model_path = night_model_path
-        self.conf  = conf
+        self.conf        = conf
+        self._botsort_cfg = botsort_cfg
 
         # YOLO detector is now loaded per-camera in process_source
         # to isolate BoT-SORT tracking states between cameras.
         
-        # Load Re-ID model
-        print("🧠 Loading Re-ID model...")
-        self.reid_model = ReIDNetwork(embedding_dim=128, pretrained=False)
-        checkpoint = torch.load(reid_model_path, map_location=self.device)
-        self.reid_model.load_state_dict(checkpoint['model_state_dict'])
-        self.reid_model = self.reid_model.to(self.device)
-        self.reid_model.eval()
-        
-        # Re-ID preprocessing
-        self.reid_transform = transforms.Compose([
-            transforms.Resize((256, 128)),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
+        # ── Re-ID backend selection ────────────────────────────────────────
+        # Pass model_name='osnet_x1_0' (or x0_75 / x0_5) to use the
+        # industry-standard OSNet pre-trained on Market-1501 + MSMT17.
+        # Pass a .pth file path to use the project-trained custom model.
+        # ─────────────────────────────────────────────────────────────────
+        _OSNET_NAMES = ('osnet_x1_0', 'osnet_x0_75', 'osnet_x0_5', 'osnet_x1_4')
+        self._use_osnet = reid_model_path in _OSNET_NAMES
+
+        if self._use_osnet:
+            if not _TORCHREID_AVAILABLE:
+                msg = (
+                    "torchreid failed to import. OSNet backend is unavailable.\n"
+                    "\n"
+                    "── Fix options (run in Colab) ───────────────────────────\n"
+                    "  Option 1 (PyPI):   pip install torchreid\n"
+                    "  Option 2 (source): pip install git+https://github.com/KaiyangZhou/deep-person-reid.git\n"
+                    "─────────────────────────────────────────────────────────\n"
+                )
+                if _TORCHREID_IMPORT_ERROR:
+                    msg += f"Actual import error was:\n  {_TORCHREID_IMPORT_ERROR}\n"
+                raise ImportError(msg)
+            print(f"🧠 Loading OSNet Re-ID model ({reid_model_path})...")
+            print("   Downloading pre-trained weights (Market-1501 + MSMT17) if not cached...")
+            self.reid_extractor = OsNetExtractor(
+                model_name=reid_model_path,
+                device=str(self.device)
             )
-        ])
+            self._embedding_dim = 512
+            print("✅ OSNet loaded! (~90% Rank-1, pre-trained on 128k person images)")
+        else:
+            print("🧠 Loading custom Re-ID model...")
+            self.reid_model = ReIDNetwork(embedding_dim=128, pretrained=False)
+            checkpoint = torch.load(reid_model_path, map_location=self.device)
+            self.reid_model.load_state_dict(checkpoint['model_state_dict'])
+            self.reid_model = self.reid_model.to(self.device)
+            self.reid_model.eval()
+            self._embedding_dim = 128
+
+            # Preprocessing pipeline (custom model only)
+            self.reid_transform = transforms.Compose([
+                transforms.Resize((256, 128)),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406],
+                    std=[0.229, 0.224, 0.225]
+                )
+            ])
+            print("✅ Custom Re-ID model loaded.")
         
         # Global person gallery (shared across all cameras)
         self.gallery = GlobalPersonGallery(similarity_threshold=similarity_threshold)
@@ -485,33 +581,72 @@ class MultiCameraTracker:
         print("✅ MultiCameraTracker initialized!")
     
     def extract_features(self, frame: np.ndarray, detections: np.ndarray) -> List[np.ndarray]:
-        """Extract Re-ID features for detected persons."""
-        features = []
-        
-        for det in detections:
+        """
+        Extract Re-ID features for detected persons.
+
+        Supports two backends:
+          OSNet    — batches all crops in one forward pass (fast, accurate)
+          Custom   — processes each crop individually (legacy)
+
+        Returns a list of numpy feature vectors, one per detection.
+        Zero vectors are returned for invalid/empty bounding boxes.
+        """
+        # Pre-allocate output: one slot per detection, filled with zeros
+        features: List[np.ndarray] = [
+            np.zeros(self._embedding_dim) for _ in detections
+        ]
+
+        if len(detections) == 0:
+            return features
+
+        # ── Step 1: Crop and validate all bounding boxes ──────────────────
+        # MIN SIZE FILTER: Skip very small bboxes — they come from distant/
+        # partially-visible people whose crops are too low-resolution for
+        # OSNet to extract reliable features. These detections still get
+        # tracked by BotSort (the zero vector keeps their gallery slot), but
+        # they won't corrupt gallery entries with bad embeddings.
+        MIN_W, MIN_H = 32, 64   # pixels — tune up if people are always far away
+        valid_crops: List[np.ndarray] = []   # BGR crops
+        valid_indices: List[int] = []         # maps crop → original det index
+
+        for i, det in enumerate(detections):
             x1, y1, x2, y2 = map(int, det[:4])
-            
-            # Validate coordinates
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
-            
-            if x2 <= x1 or y2 <= y1:
-                features.append(np.zeros(128))
-                continue
-            
-            # Crop and preprocess
-            crop = frame[y1:y2, x1:x2]
-            crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-            crop = Image.fromarray(crop)
-            crop_tensor = self.reid_transform(crop).unsqueeze(0).to(self.device)
-            
-            # Lock around model inference so parallel camera threads don't race
+
+            w, h = x2 - x1, y2 - y1
+            if w <= 0 or h <= 0:
+                continue  # degenerate box — keep zero vector
+            if w < MIN_W or h < MIN_H:
+                continue  # too small — low-quality crop, keep zero vector
+
+            valid_crops.append(frame[y1:y2, x1:x2])
+            valid_indices.append(i)
+
+
+        if not valid_crops:
+            return features
+
+        # ── Step 2: Run inference ──────────────────────────────────────────
+        if self._use_osnet:
+            # OSNet: accepts a list of RGB numpy arrays, returns (N, 512) tensor
+            crops_rgb = [cv2.cvtColor(c, cv2.COLOR_BGR2RGB) for c in valid_crops]
             with self._reid_lock:
-                with torch.no_grad():
-                    feature = self.reid_model(crop_tensor)
-            
-            features.append(feature.cpu().numpy().flatten())
-        
+                feat_tensor = self.reid_extractor(crops_rgb)   # (N, 512)
+            feat_array = feat_tensor.cpu().numpy()             # already L2-normalised
+            for arr_idx, det_idx in enumerate(valid_indices):
+                features[det_idx] = feat_array[arr_idx]
+        else:
+            # Custom model: process each crop individually
+            for arr_idx, det_idx in enumerate(valid_indices):
+                crop_rgb = cv2.cvtColor(valid_crops[arr_idx], cv2.COLOR_BGR2RGB)
+                pil_crop = Image.fromarray(crop_rgb)
+                crop_tensor = self.reid_transform(pil_crop).unsqueeze(0).to(self.device)
+                with self._reid_lock:
+                    with torch.no_grad():
+                        feature = self.reid_model(crop_tensor)
+                features[det_idx] = feature.cpu().numpy().flatten()
+
         return features
 
     @staticmethod
@@ -594,12 +729,13 @@ class MultiCameraTracker:
             brightness = self._measure_brightness(frame)
         enhanced_frame = self.enhance_frame_lowlight(frame, brightness)
 
-        # Track persons using built-in BoT-SORT
-        # conf=0.25: lower than default 0.5 so dim/dark detections aren't discarded
+        # Track persons using built-in BoT-SORT with tuned parameters.
+        # botsort_custom.yaml lowers match_thresh (0.65 vs default 0.8) to
+        # reduce ID swaps when two people cross paths.
         results = local_tracker.track(
             enhanced_frame,
             persist=True,
-            tracker="botsort.yaml",
+            tracker=self._botsort_cfg,
             classes=[0],
             conf=self.conf,
             imgsz=self.imgsz,
@@ -629,11 +765,26 @@ class MultiCameraTracker:
         
         # Get all active local track IDs in this frame to prevent gallery collisions
         active_local_ids = {track_info["track_id"] for track_info in local_tracks}
-        
+
+        # Identify detections at the frame border — these are partial/occluded views.
+        # Their noisy embeddings must NOT update existing gallery entries (Bug #2 fix).
+        # They can still CREATE new gallery entries and MATCH existing ones.
+        EDGE_MARGIN = 30  # pixels from any frame border
+        frame_h, frame_w = frame.shape[:2]
+
         global_tracks = []
         for track_info, track_feature in zip(local_tracks, features):
+            x1, y1, x2, y2 = map(int, track_info["bbox"])
+            is_edge = (
+                x1 < EDGE_MARGIN or
+                x2 > frame_w - EDGE_MARGIN or
+                y1 < EDGE_MARGIN or
+                y2 > frame_h - EDGE_MARGIN
+            )
             global_id = self.gallery.find_or_create_global_id(
-                track_info["track_id"], track_feature, camera_name, active_local_ids
+                track_info["track_id"], track_feature, camera_name,
+                active_local_ids,
+                update_gallery=not is_edge   # edge detections never corrupt gallery
             )
             global_tracks.append((global_id, track_info["bbox"]))
         
@@ -1077,15 +1228,16 @@ def main():
     print("=" * 60)
     print("🎯 MULTI-CAMERA PERSON TRACKING SYSTEM")
     print("=" * 60)
-    
-    PROJECT_ROOT = '/content/drive/MyDrive/persona_detection_final'
-    reid_model_path = f'{PROJECT_ROOT}/phase2_reid/checkpoints/best_reid_model.pth'
-    
-    # Check model exists
-    if not os.path.exists(reid_model_path):
-        print(f"❌ Model not found: {reid_model_path}")
-        print("   Run download_model.py first")
-        return
+
+    # Use OSNet by default (auto-downloads, no local .pth needed)
+    reid_model_path = 'osnet_x1_0'
+
+    # Fall back to custom model if OSNet name is overridden
+    if reid_model_path not in ('osnet_x1_0', 'osnet_x0_75', 'osnet_x0_5', 'osnet_x1_4'):
+        if not os.path.exists(reid_model_path):
+            print(f"❌ Model not found: {reid_model_path}")
+            print("   Use --model osnet_x1_0  or  supply a valid .pth path")
+            return
     
     # Initialize tracker
     tracker = MultiCameraTracker(reid_model_path)

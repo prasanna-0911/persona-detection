@@ -69,12 +69,17 @@ Examples:
     # Processing options
     parser.add_argument('--max-frames', type=int, default=None, help='Max frames to process')
     parser.add_argument('--camera-name', type=str, default='Camera_1', help='Camera name')
-    parser.add_argument('--similarity-threshold', type=float, default=0.80, 
-                       help='Cross-camera matching threshold (0-1)')
-    # Re-ID model option
-    parser.add_argument('--model', type=str, 
-                       default='phase2_reid/checkpoints/best_reid_model.pth',
-                       help='Path to Re-ID model')
+    parser.add_argument('--similarity-threshold', type=float, default=0.70,
+                       help='Cross-camera Re-ID matching threshold (0-1). '
+                            'OSNet recommended range: 0.65-0.75. '
+                            'Higher = stricter (fewer false matches). '
+                            'Lower = more lenient (more cross-camera matches but risk of wrong ID). '
+                            'Default 0.70 is the sweet spot for OSNet on CCTV footage.')
+    parser.add_argument('--model', type=str,
+                       default='osnet_x1_0',
+                       help='Re-ID model: OSNet name (osnet_x1_0 / osnet_x0_75 / osnet_x0_5) '
+                            'or path to custom .pth file. '
+                            'OSNet requires: pip install git+https://github.com/KaiyangZhou/deep-person-reid.git')
 
     # Detection model options
     parser.add_argument('--yolo-model', type=str,
@@ -93,14 +98,20 @@ Examples:
                        help='YOLO confidence threshold (0.0-1.0). Lower = more detections.')
     parser.add_argument('--imgsz', type=int, default=960,
                        help='YOLO inference image size. 960 recommended for nighttime.')
+    parser.add_argument('--botsort-cfg', type=str, default='botsort_custom.yaml',
+                       help='BotSort tracker config YAML. Use botsort_custom.yaml (tuned) '
+                            'or botsort.yaml (default Ultralytics). '
+                            'botsort_custom.yaml reduces ID swaps at pedestrian crossings.')
     
     args = parser.parse_args()
     
-    # Check model exists
-    if not os.path.exists(args.model):
-        print(f"❌ Model not found: {args.model}")
-        print("\nDownload the model first:")
-        print("  python download_model.py")
+    # Check model exists (skip check for known OSNet model names — they auto-download)
+    _OSNET_NAMES = ('osnet_x1_0', 'osnet_x0_75', 'osnet_x0_5', 'osnet_x1_4')
+    if args.model not in _OSNET_NAMES and not os.path.exists(args.model):
+        print(f"\u274c Re-ID model not found: {args.model}")
+        print("\nOptions:")
+        print("  1. Use OSNet (recommended):  --model osnet_x1_0")
+        print("  2. Use custom model:         --model phase2_reid/checkpoints/best_reid_model.pth")
         sys.exit(1)
     
     # Import tracker
@@ -113,6 +124,7 @@ Examples:
     print(f"   Night model: {args.night_model}")
     print(f"   Conf       : {args.conf}")
     print(f"   Img size   : {args.imgsz}")
+    print(f"   BotSort cfg: {args.botsort_cfg}")
     tracker = MultiCameraTracker(
         reid_model_path=args.model,
         device=args.device,
@@ -121,7 +133,8 @@ Examples:
         day_model_path=args.day_model,
         night_model_path=args.night_model,
         conf=args.conf,
-        imgsz=args.imgsz
+        imgsz=args.imgsz,
+        botsort_cfg=args.botsort_cfg
     )
     
     # Process based on mode

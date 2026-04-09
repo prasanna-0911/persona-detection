@@ -1,0 +1,44 @@
+# botsort_custom.yaml
+# Tuned BotSort parameters for the Persona Detection pipeline.
+# Compatible with the current ultralytics version (includes all required fields).
+#
+# Key tuning vs ultralytics defaults:
+#   match_thresh : 0.65 (default=0.8) — STRICTER IoU matching when people cross
+#   track_buffer : 45  (default=30)  — Hold lost tracks alive longer for re-entry
+#   track_low_thresh: 0.20 (default=0.1) — Fewer ghost/noise tracks
+
+tracker_type: botsort
+
+# --- Detection confidence gates ---
+track_high_thresh: 0.45     # min conf for primary (high-quality) association
+                             # aligned with our --conf default
+track_low_thresh: 0.20      # min conf for secondary (rescue) association
+                             # raised from 0.1 → fewer ghost tracks
+new_track_thresh: 0.55      # min conf to start a NEW track
+
+# --- Track lifecycle ---
+track_buffer: 45            # frames to keep a lost track alive before deleting
+                             # 45 @ 30fps = 1.5 seconds of re-entry buffer
+                             # (default=30 = 1.0 second)
+
+# --- Association threshold ---
+match_thresh: 0.65          # *** KEY CROSSING FIX ***
+                             # Max IoU distance allowed for detection→track match.
+                             # LOWER = STRICTER (harder to swap IDs when crossing).
+                             # Default 0.8 is too permissive for crowded scenes.
+
+# --- Score fusion ---
+fuse_score: True            # Fuse YOLO confidence into association cost matrix
+
+# --- BoT-SORT specific (REQUIRED by current ultralytics) ---
+gmc_method: sparseOptFlow   # Global Motion Compensation method.
+                             # Compensates for camera pan/tilt during tracking.
+                             # Options: sparseOptFlow, orb, ecc, none
+                             # sparseOptFlow is fastest and works well for CCTV.
+
+proximity_thresh: 0.5       # IoU threshold for first-stage proximity check
+appearance_thresh: 0.25     # Appearance distance threshold (only used if with_reid=True)
+
+# --- ReID inside BotSort ---
+# Disabled: Re-ID is handled externally by GlobalPersonGallery + OSNet.
+with_reid: False
