@@ -80,6 +80,18 @@ Examples:
                        help='Re-ID model: OSNet name (osnet_x1_0 / osnet_x0_75 / osnet_x0_5) '
                             'or path to custom .pth file. '
                             'OSNet requires: pip install git+https://github.com/KaiyangZhou/deep-person-reid.git')
+    parser.add_argument('--re-entry-threshold', type=float, default=0.45,
+                       help='Similarity threshold for same-camera re-entry matching (0-1). '
+                            'Applied when a gallery entry was last seen in THIS camera within '
+                            '--re-entry-window seconds. Lower = more lenient re-entry matching. '
+                            'Default 0.45 handles OSNet front/back view changes in office cameras. '
+                            'Raise to 0.55 if false merges occur. Lower to 0.38 if re-entry still fails.')
+    parser.add_argument('--re-entry-window', type=float, default=120.0,
+                       help='Time window (seconds) for same-camera lenient re-entry matching. '
+                            'If a gallery entry was last seen in THIS camera within this window, '
+                            're-entry threshold is used instead of the strict stale threshold. '
+                            'Default 120s (2 min) suits office cameras. '
+                            'Use 20s for busy outdoor cameras where unrelated people pass the same spot.')
 
     # Detection model options
     parser.add_argument('--yolo-model', type=str,
@@ -129,6 +141,8 @@ Examples:
         reid_model_path=args.model,
         device=args.device,
         similarity_threshold=args.similarity_threshold,
+        re_entry_threshold=args.re_entry_threshold,
+        re_entry_window_secs=args.re_entry_window,
         yolo_model_path=args.yolo_model,
         day_model_path=args.day_model,
         night_model_path=args.night_model,

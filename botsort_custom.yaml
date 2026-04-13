@@ -14,12 +14,12 @@ track_high_thresh: 0.45     # min conf for primary (high-quality) association
                              # aligned with our --conf default
 track_low_thresh: 0.20      # min conf for secondary (rescue) association
                              # raised from 0.1 → fewer ghost tracks
-new_track_thresh: 0.55      # min conf to start a NEW track
+new_track_thresh: 0.50      # min conf to start a NEW track (was 0.55)
 
 # --- Track lifecycle ---
-track_buffer: 45            # frames to keep a lost track alive before deleting
-                             # 45 @ 30fps = 1.5 seconds of re-entry buffer
-                             # (default=30 = 1.0 second)
+track_buffer: 90            # frames to keep a lost track alive before deleting
+                             # 90 @ 30fps = 3.0 seconds of re-entry buffer
+                             # (was 45 = 1.5 seconds — not enough for car/wall occlusions)
 
 # --- Association threshold ---
 match_thresh: 0.65          # *** KEY CROSSING FIX ***

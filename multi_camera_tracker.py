@@ -57,7 +57,8 @@ import queue
 import numpy as np
 from datetime import datetime
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import random
 from typing import List, Dict, Optional, Tuple, Union
 
 import torch
@@ -118,28 +119,126 @@ class PersonRecord:
         last_seen: Timestamp of last detection
         cameras_seen: Set of camera names where person was seen
         total_detections: Total number of detections
+        stable_count: Number of full-body (non-edge) embeddings stored.
+            Used to identify 'provisional' entries that were built from
+            partial-view crops and therefore deserve lenient match thresholds.
     """
     global_id: int
     features: List[np.ndarray]
     last_seen: float
     cameras_seen: set
     total_detections: int = 0
-    
+    stable_count: int = 0   # counts non-edge (full-body) embeddings only
+    stable_features: List[np.ndarray] = field(default_factory=list)
+    # ^ Full-body embeddings ONLY, spanning the entire video timeline (max 30).
+    # Kept separate from `features` (which includes edge/partial crops) so that
+    # _compute_best_similarity can search the person's complete appearance history
+    # rather than just the most recent 15 mixed embeddings.
+    # Solves the temporal-mismatch problem: when Camera_1 has processed 1200 frames
+    # before Camera_2 starts, Camera_1's gallery still retains the person's
+    # frame-0 full-body embedding here, allowing Camera_2 to match it.
+    last_bbox: Optional[np.ndarray] = None
+    # ^ Last known bounding box [x1,y1,x2,y2] for spatial fallback matching.
+    # When embedding similarity fails (e.g. person turns 90° and OSNet changes),
+    # high bbox IoU with a gallery entry's last position is still a strong signal
+    # of the same person.  Updated every frame regardless of partial/edge status.
+    departure_features: List[np.ndarray] = field(default_factory=list)
+    # ^ Last N full-body embeddings captured just before the person's BotSort
+    # track was last dropped (i.e. the "leaving" frames).  Stored per-departure
+    # and capped at 5 embeddings.  These transitional views (e.g. left-front
+    # when walking toward a door) are closer in OSNet cosine space to the
+    # re-entry view (back-right entering) than the stable sitting embeddings
+    # are, boosting best-match similarity from 0.38-0.52 to 0.50-0.65 for the
+    # same person — enough to clear the re_entry_threshold of 0.45.
+    # Replaced (not appended) on each new departure so the pool always
+    # reflects the most recent leaving direction.
+
+    @property
+    def is_provisional(self) -> bool:
+        """True while this entry has fewer than 5 full-body embeddings.
+
+        Provisional entries were built from partial-view crops (edge detections,
+        head-only, arm-only, etc.) whose OSNet embeddings are noisy.  Requiring a
+        strict 0.70 threshold when matching AGAINST such an entry would cause
+        missed matches — the stored embeddings themselves are weak, so the gallery
+        similarity is inherently lower even for the correct person.  The caller
+        should lower the effective match threshold for provisional entries.
+        """
+        return self.stable_count < 5
+
     def get_average_feature(self) -> np.ndarray:
         """Get average feature vector for matching."""
         if not self.features:
             return None
         return np.mean(self.features, axis=0)
-    
-    def add_feature(self, feature: np.ndarray, camera_name: str):
-        """Add a new feature observation."""
+
+    def add_feature(self, feature: np.ndarray, camera_name: str,
+                    is_stable: bool = True):
+        """Add a new feature observation.
+
+        Args:
+            feature: ReID embedding vector.
+            camera_name: Which camera detected this person.
+            is_stable: True if from a full-body (non-edge) crop.
+                       False for partial/edge crops whose embeddings are noisy.
+                       Only stable observations increment stable_count.
+        """
         self.features.append(feature)
-        # Keep only last 50 features
+        # Keep only last 50 features to bound memory
         if len(self.features) > 50:
             self.features = self.features[-50:]
         self.last_seen = time.time()
         self.cameras_seen.add(camera_name)
         self.total_detections += 1
+        if is_stable:
+            self.stable_count += 1  # track entry quality
+            # ── Anchored Reservoir Sampling ──────────────────────────────
+            # User insight: "why not collect embeddings from when the person
+            # FIRST appeared?" — Absolutely right.  Early embeddings are the
+            # most valuable because:
+            #   1. Camera_B (starting late) queries with EARLY-video embeddings
+            #      and needs them preserved in Camera_A's gallery.
+            #   2. A person’s first appearance is often their cleanest full-body
+            #      view (just entered the scene, not yet occluded).
+            #
+            # Two-zone strategy:
+            #   ANCHOR zone  (slots 0–9, first 10):  NEVER replaced.  Locked in
+            #     from the person’s first 10 full-body frames.  Guarantees that
+            #     Camera_B / sequential processing always finds a temporally-early
+            #     embedding to match against.
+            #   RESERVOIR zone (slots 10–29, next 20): Vitter Algorithm R.
+            #     Each new embedding replaces a random slot in this zone with
+            #     probability 20/(stable_count−10), giving a uniform sample of
+            #     mid/late-video appearances on top of the fixed early anchor.
+            ANCHOR_SIZE    = 10   # first N embeddings — locked forever
+            RESERVOIR_SIZE = 20   # uniform sample of all later embeddings
+            TOTAL_CAP      = ANCHOR_SIZE + RESERVOIR_SIZE  # 30 total
+
+            if len(self.stable_features) < TOTAL_CAP:
+                # Phase 1: fill all 30 slots sequentially
+                self.stable_features.append(feature)
+            elif self.stable_count > ANCHOR_SIZE:
+                # Phase 2: reservoir-replace only in the RESERVOIR zone (10–29)
+                reservoir_observations = self.stable_count - ANCHOR_SIZE
+                idx = random.randint(0, reservoir_observations - 1)
+                if idx < RESERVOIR_SIZE:
+                    self.stable_features[ANCHOR_SIZE + idx] = feature
+
+    def add_departure_feature(self, feature: np.ndarray):
+        """Record a 'leaving' embedding captured just before departing camera view.
+
+        Departure embeddings are transitional views (e.g., person turning to
+        walk toward the door). They score 0.50-0.65 in cosine space against
+        re-entry views (back-right entering) vs 0.38-0.52 for stable sitting
+        embeddings, making them essential for successful re-entry matching.
+
+        Max 5 departure embeddings kept (last 5 frames before disappearance).
+        They are REPLACED on each new departure (not accumulated across trips),
+        so the search pool always reflects the most recent leaving direction.
+        """
+        self.departure_features.append(feature)
+        if len(self.departure_features) > 5:
+            self.departure_features = self.departure_features[-5:]  # keep newest 5
 
 
 class GlobalPersonGallery:
@@ -151,39 +250,54 @@ class GlobalPersonGallery:
     person in the gallery.
     """
     
-    def __init__(self, similarity_threshold: float = 0.80, max_gallery_size: int = 1000):
+    def __init__(self, similarity_threshold: float = 0.80,
+                 edge_match_threshold: float = 0.50,
+                 re_entry_threshold: float = 0.45,
+                 re_entry_window_secs: float = 120.0,
+                 max_gallery_size: int = 1000):
         """
         Initialize global gallery.
-        
+
         Args:
-            similarity_threshold: Minimum similarity to match (0-1).
-                Stricter threshold prevents different people in crowded scenes
-                from swapping their Re-ID assignments.
+            similarity_threshold: Minimum cosine similarity to match a
+                FULL-BODY detection against a stable gallery entry (0–1).
+                Strict threshold (0.70) prevents false positives between
+                similarly-dressed different people in crowded scenes.
+            edge_match_threshold: Minimum cosine similarity to match a
+                PARTIAL-BODY (edge/occluded) detection, or any detection
+                against a PROVISIONAL gallery entry (stable_count < 5).
+                Must be lower (0.45–0.55) because OSNet produces 0.42–0.65
+                similarity for the SAME person when one side is partial-crop.
             max_gallery_size: Maximum number of persons to track
         """
         self.persons: Dict[int, PersonRecord] = {}
         self.next_global_id = 1
         self.similarity_threshold = similarity_threshold
+        self.edge_match_threshold = edge_match_threshold
+        self.re_entry_threshold = re_entry_threshold
+        self.re_entry_window_secs = re_entry_window_secs
         self.max_gallery_size = max_gallery_size
-        
+
         # Local to global ID mapping per camera
         # camera_name -> {local_track_id -> global_id}
         self.local_to_global: Dict[str, Dict[int, int]] = defaultdict(dict)
-        
+
         # Lock for thread safety
         self.lock = threading.Lock()
     
     def find_or_create_global_id(
-        self, 
-        local_track_id: int, 
-        feature: np.ndarray, 
+        self,
+        local_track_id: int,
+        feature: np.ndarray,
         camera_name: str,
         active_local_ids: set,
-        update_gallery: bool = True
+        update_gallery: bool = True,
+        is_edge: bool = False,
+        bbox: Optional[np.ndarray] = None
     ) -> int:
         """
         Find existing global ID or create new one.
-        
+
         Args:
             local_track_id: Track ID from local camera tracker
             feature: Re-ID feature vector
@@ -193,7 +307,15 @@ class GlobalPersonGallery:
                 entries. Used for edge/partial detections whose noisy features
                 would corrupt gallery entries. New entries are still created
                 (so the track is visible), but existing entries are not polluted.
-            
+            is_edge: True if this detection is at the frame border OR has a low
+                aspect ratio (partial body). When True, a lenient
+                edge_match_threshold is used for gallery search instead of
+                similarity_threshold, because OSNet partial-crop embeddings
+                score only 0.42–0.65 for the SAME person vs a full-body entry.
+            bbox: Bounding box [x1,y1,x2,y2] of this detection (float32).
+                Stored as last_bbox on matched/created entries and used as a
+                spatial fallback when embedding similarity fails (IoU ≥ 0.25).
+
         Returns:
             Global ID for this person
         """
@@ -209,12 +331,26 @@ class GlobalPersonGallery:
             # Check if we already have a mapping for this local track
             if local_track_id in self.local_to_global[camera_name]:
                 global_id = self.local_to_global[camera_name][local_track_id]
-                # Only update gallery features if this is a stable (non-edge) detection
+                # Update gallery, marking whether this is a stable (full-body) review
                 if global_id in self.persons and update_gallery:
-                    self.persons[global_id].add_feature(feature, camera_name)
+                    self.persons[global_id].add_feature(
+                        feature, camera_name, is_stable=not is_edge
+                    )
+                if global_id in self.persons and bbox is not None:
+                    self.persons[global_id].last_bbox = bbox  # always track position
                 return global_id
-            
-            # --- New track: search gallery using best-of-N individual similarity ---
+
+            # ── Dual threshold selection ────────────────────────────────────────
+            # Partial/edge detections → lenient edge_match_threshold (e.g. 0.50)
+            #   OSNet produces lower cosine similarity for head-only / back-only /
+            #   arm-only crops versus a full-body gallery entry for the SAME person.
+            #   Using 0.70 here would cause these detections to always miss, creating
+            #   new gallery IDs on every partial-view frame.
+            # Full-body detections → strict similarity_threshold (e.g. 0.70)
+            #   Prevents similarly-dressed DIFFERENT people from merging into one ID.
+            query_thresh = self.edge_match_threshold if is_edge else self.similarity_threshold
+
+            # ── New track: search gallery using best-of-N individual similarity ──
             # WHY best-of-N instead of mean-embedding:
             #   The mean of 20+ embeddings from different poses/viewpoints drifts
             #   away from any single frame's embedding, causing both false positives
@@ -223,32 +359,125 @@ class GlobalPersonGallery:
             #   matching view, which is far more robust.
             best_match_id = None
             best_similarity = 0
-            
+
             for global_id, person in self.persons.items():
                 # Do not merge with a Global ID already taken in this frame
                 if global_id in active_global_ids_in_camera:
                     continue
                 if not person.features:
                     continue
-                
+
                 # Best-of-N: compare query against each recent individual embedding
                 similarity = self._compute_best_similarity(feature, person)
-                
-                if similarity > best_similarity and similarity >= self.similarity_threshold:
+
+                # ── Temporal recency gate + same-camera re-entry ──────────
+                # Problem (observed in video): Person A leaves the scene. Person B
+                # enters PARTIALLY a few seconds later. The lenient 0.62 threshold
+                # accidentally matches Person B against Person A's stale gallery
+                # entry ('ID stealing'). Person B then inherits Person A's global ID.
+                #
+                # General fix: gallery entries older than 8 s revert to the strict
+                # similarity_threshold (0.80) to prevent cross-person ID theft.
+                #
+                # SAME-CAMERA RE-ENTRY EXCEPTION (office camera fix):
+                # If the gallery entry was last seen in THIS camera within
+                # re_entry_window_secs (default 120 s), use the much more lenient
+                # re_entry_threshold (default 0.45) even when stale.
+                # Rationale: the person was physically in THIS room recently.
+                # OSNet front-to-back view change yields similarity 0.38-0.58,
+                # below the strict 0.80 threshold but above 0.45. Without this
+                # exception, every re-entry through the same door creates a new ID.
+                RECENCY_SECS = 8.0
+                seconds_since_seen = time.time() - person.last_seen
+                is_stale = seconds_since_seen > RECENCY_SECS
+
+                # Same-camera re-entry check
+                was_seen_in_this_camera = camera_name in person.cameras_seen
+                is_fresh_in_this_camera = seconds_since_seen < self.re_entry_window_secs
+
+                # Effective threshold logic:
+                #   same-camera re-entry (stale but fresh in THIS camera):
+                #     -> lenient re_entry_threshold (0.45) -- bypass stale gate
+                #   cross-time / cross-camera stale:
+                #     -> strict similarity_threshold (0.80) -- prevent ID theft
+                #   fresh (within 8 s):
+                #     -> query/entry leniency as before
+                if is_stale and was_seen_in_this_camera and is_fresh_in_this_camera:
+                    effective_thresh = self.re_entry_threshold   # 0.45 -- same-cam re-entry
+                elif is_stale:
+                    effective_thresh = self.similarity_threshold  # 0.80 -- strict for stale
+                else:
+                    entry_thresh = (
+                        self.edge_match_threshold if person.is_provisional
+                        else self.similarity_threshold
+                    )
+                    effective_thresh = min(query_thresh, entry_thresh)
+
+                if similarity > best_similarity and similarity >= effective_thresh:
                     best_similarity = similarity
                     best_match_id = global_id
-            
+
+            # ── Spatial IoU fallback ───────────────────────────────────────
+            # Embedding similarity failed for every gallery entry.  Before creating
+            # a new global ID, check whether any gallery entry's LAST KNOWN POSITION
+            # overlaps this detection's bbox (IoU ≥ 0.25).
+            #
+            # Use case: person turns a corner or emerges from behind an obstacle.
+            # Their OSNet embedding changes substantially (front → back changes
+            # cosine similarity from ~0.85 to ~0.55), but they're still at the
+            # same spatial location.  Without this fallback, every direction-change
+            # would spawn a new global ID.
+            #
+            # Safety: only gallery entries NOT active in this frame are eligible
+            # (active_global_ids_in_camera is excluded), so we never steal IDs
+            # from still-alive tracks that happen to be nearby.
+            if best_match_id is None and bbox is not None:
+                # ── Appearance-weighted IoU fallback ──────────────────────
+                # Combines spatial overlap with appearance similarity:
+                #   combined_score = 0.4 * IoU + 0.6 * appearance_similarity
+                #
+                # Why: pure IoU picks whoever's last_bbox happens to overlap
+                # most with the new detection. In an office, multiple people
+                # pass through the same door, so their last_bboxes cluster
+                # near the door frame. Pure IoU would pick the wrong person.
+                # Weighting appearance more heavily (0.6) ensures the person
+                # with the most similar OSNet embedding wins the fallback,
+                # even when IoU values are similar across candidates.
+                best_combined = 0.0
+                IOU_FLOOR = 0.20   # minimum IoU to enter the candidate set
+                for global_id, person in self.persons.items():
+                    if global_id in active_global_ids_in_camera:
+                        continue
+                    if person.last_bbox is None:
+                        continue
+                    iou = self._bbox_iou(bbox, person.last_bbox)
+                    if iou < IOU_FLOOR:
+                        continue
+                    # Appearance similarity as primary discriminator
+                    appearance_sim = self._compute_best_similarity(feature, person)
+                    combined = 0.4 * iou + 0.6 * appearance_sim
+                    if combined > best_combined:
+                        best_combined = combined
+                        best_match_id = global_id
+
             if best_match_id is not None:
-                # Found a match — use existing global ID
-                # Only update the gallery if detection is stable (not at frame edge)
+                # Found a match — use existing global ID.
+                # Only update the gallery if detection is stable (not at frame edge).
                 if update_gallery:
-                    self.persons[best_match_id].add_feature(feature, camera_name)
+                    self.persons[best_match_id].add_feature(
+                        feature, camera_name, is_stable=not is_edge
+                    )
+                if bbox is not None:
+                    self.persons[best_match_id].last_bbox = bbox  # always update position
                 self.local_to_global[camera_name][local_track_id] = best_match_id
                 return best_match_id
             else:
-                # No match — create new gallery entry
-                # Always add the feature to new entries (needed to make them matchable)
-                new_global_id = self._create_new_person(feature, camera_name)
+                # No match — create new gallery entry.
+                # Always add first embedding even for edge detections (needed to
+                # make the new entry searchable). Mark its quality correctly.
+                new_global_id = self._create_new_person(
+                    feature, camera_name, is_stable=not is_edge, bbox=bbox
+                )
                 self.local_to_global[camera_name][local_track_id] = new_global_id
                 return new_global_id
     
@@ -258,50 +487,107 @@ class GlobalPersonGallery:
         f2 = feature2 / (np.linalg.norm(feature2) + 1e-8)
         return float(np.dot(f1, f2))
 
+    @staticmethod
+    def _bbox_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
+        """
+        Intersection-over-Union between two [x1,y1,x2,y2] bounding boxes.
+
+        Used as a spatial fallback in find_or_create_global_id when embedding
+        similarity drops below threshold (e.g. person turns a corner, changing
+        their OSNet embedding significantly while remaining at the same position).
+        IoU threshold 0.25 is intentionally low: partial bboxes and frame-to-frame
+        position jitter mean a strict threshold would miss valid matches.
+        """
+        ax1, ay1, ax2, ay2 = float(box_a[0]), float(box_a[1]), float(box_a[2]), float(box_a[3])
+        bx1, by1, bx2, by2 = float(box_b[0]), float(box_b[1]), float(box_b[2]), float(box_b[3])
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+        if inter == 0.0:
+            return 0.0
+        area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+        area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+        return inter / (area_a + area_b - inter + 1e-8)
+
     def _compute_best_similarity(self, query: np.ndarray, person: PersonRecord) -> float:
         """
-        Return the MAXIMUM cosine similarity between `query` and any of the
-        person's individual stored embeddings (instead of their mean).
+        Return the MAXIMUM cosine similarity between `query` and any stored
+        full-body embedding for this person.
+
+        Search pool priority:
+          1. stable_features (full-body only, up to 30, spans entire timeline)
+             Used when >= 3 stable embeddings are available.  This preserves
+             early-video appearances so a Camera_2 query from the START of the
+             footage can still match Camera_1's frame-0 embedding even after
+             Camera_1 has processed 1200+ additional frames.
+          2. features[-15:] (fallback for new/provisional entries with < 3 stable)
+             Most-recent 15 mixed embeddings — the original behaviour.
 
         Why best-of-N instead of mean-embedding:
           - Mean of 20 embeddings from mixed viewpoints/poses drifts off the
             unit hypersphere, degrading discriminability.
           - A single GOOD embedding at the right angle gives 0.90+ similarity
             even when the mean would only score 0.60.
-          - This prevents gallery drift from causing wrong cross-camera matches
-            and same-camera identity switches.
-
-        Only the most recent 15 embeddings are checked to avoid stale views
-        from minutes ago influencing present matches.
         """
-        if not person.features:
+        if len(person.stable_features) >= 3:
+            # Prefer full-body embeddings that span the whole video timeline
+            search_pool = list(person.stable_features)
+        elif person.features:
+            # Fallback: use last 15 mixed embeddings for new/provisional entries
+            search_pool = list(person.features[-15:])
+        else:
             return 0.0
+
+        # Include departure embeddings (last 5 'leaving' views).
+        # These transitional views bridge sitting (right-front) and re-entry
+        # (back-right), boosting best-match similarity from 0.38-0.52 to
+        # 0.50-0.65 for the same person re-entering through the same door.
+        # Crucially, after each successful re-entry the departure_features
+        # are refreshed with the new 'leaving again' frames, making every
+        # subsequent re-entry progressively easier to match.
+        if person.departure_features:
+            search_pool = search_pool + list(person.departure_features)
+
         q = query / (np.linalg.norm(query) + 1e-8)
         max_sim = 0.0
-        for feat in person.features[-15:]:
+        for feat in search_pool:
             f = feat / (np.linalg.norm(feat) + 1e-8)
             sim = float(np.dot(q, f))
             if sim > max_sim:
                 max_sim = sim
         return max_sim
     
-    def _create_new_person(self, feature: np.ndarray, camera_name: str) -> int:
-        """Create a new person record."""
+    def _create_new_person(self, feature: np.ndarray, camera_name: str,
+                           is_stable: bool = True,
+                           bbox: Optional[np.ndarray] = None) -> int:
+        """Create a new person record.
+
+        Args:
+            feature: Initial ReID embedding.
+            camera_name: Camera that first saw this person.
+            is_stable: True if the initial detection is full-body (non-edge).
+                       Determines whether the first embedding counts toward
+                       stable_count, which gates the 'provisional' flag.
+            bbox: Initial bounding box; stored as last_bbox for spatial fallback.
+        """
         # Clean up old entries if gallery is full
         if len(self.persons) >= self.max_gallery_size:
             self._cleanup_old_entries()
-        
+
         global_id = self.next_global_id
         self.next_global_id += 1
-        
+
         self.persons[global_id] = PersonRecord(
             global_id=global_id,
             features=[feature],
             last_seen=time.time(),
             cameras_seen={camera_name},
-            total_detections=1
+            total_detections=1,
+            stable_count=1 if is_stable else 0,           # track quality from birth
+            stable_features=[feature] if is_stable else [], # preserve first good view
+            last_bbox=bbox,                                # for spatial fallback
         )
-        
+
         return global_id
     
     def _cleanup_old_entries(self, max_age_seconds: float = 3600):
@@ -315,7 +601,36 @@ class GlobalPersonGallery:
         
         for global_id in to_remove[:len(self.persons) // 4]:  # Remove at most 25%
             del self.persons[global_id]
-    
+
+    def record_departure(self, global_id: int,
+                         embeddings: List[np.ndarray]) -> None:
+        """Store departure embeddings for a person leaving this camera's view.
+
+        Called by MultiCameraTracker.process_frame() with the pre-departure
+        rolling buffer -- the last N non-zero embeddings captured BEFORE
+        BotSort dropped the track.  This buffer contains the person's actual
+        last-seen appearance (e.g. walking toward the door, partial side/back
+        views near the door threshold) rather than garbage from BotSort's
+        ghost-tracking period (Kalman-only predictions from off-screen bboxes).
+
+        The departure_features list is REPLACED on each call (not appended)
+        so successive departures always reflect the most recent leaving view.
+        Crucially, the near-door frames (last 2-3 in the buffer) are edge/
+        partial views showing the person's back or side, which are much closer
+        in OSNet cosine space to the re-entry embedding than sitting views are.
+
+        Args:
+            global_id: The global ID of the person who just left.
+            embeddings: Up to 5 non-zero feature vectors from the rolling
+                        pre-departure buffer, newest last.
+        """
+        with self.lock:
+            if global_id in self.persons:
+                person = self.persons[global_id]
+                person.departure_features = []          # replace, don't accumulate
+                for feat in embeddings:
+                    person.add_departure_feature(feat)
+
     def clear_camera_mappings(self, camera_name: str):
         """Clear local-to-global mappings for a camera (for new session)."""
         with self.lock:
@@ -472,6 +787,8 @@ class MultiCameraTracker:
         reid_model_path: str,
         device: str = 'cuda',
         similarity_threshold: float = 0.7,
+        re_entry_threshold: float = 0.45,
+        re_entry_window_secs: float = 120.0,
         yolo_model_path: str = 'yolov8s.pt',
         day_model_path: str = 'yolov8s.pt',
         night_model_path: str = 'runs/detect/yolov8s_rot0/weights/best.pt',
@@ -565,14 +882,53 @@ class MultiCameraTracker:
             ])
             print("✅ Custom Re-ID model loaded.")
         
-        # Global person gallery (shared across all cameras)
-        self.gallery = GlobalPersonGallery(similarity_threshold=similarity_threshold)
+        # Global person gallery (shared across all cameras).
+        # edge_match_threshold calibration:
+        #
+        # Old value: max(0.45, sim - 0.20) = 0.50
+        #   → Too lenient. 24 total unique persons detected instead of ~40 real.
+        #   → Different people with similar appearance (same clothing color) merged.
+        #
+        # New value: max(0.62, sim - 0.08) = 0.62 for sim=0.70
+        #   → Same person partial-view: cosine similarity ~0.65–0.80 → still matches
+        #   → Different people generic: cosine similarity ~0.30–0.60 → most blocked
+        #   → The temporal recency gate provides an additional safety net for
+        #     the narrow 0.62–0.70 ambiguous zone.
+        _edge_thresh = max(0.62, similarity_threshold - 0.08)
+        self.gallery = GlobalPersonGallery(
+            similarity_threshold=similarity_threshold,
+            edge_match_threshold=_edge_thresh,
+            re_entry_threshold=re_entry_threshold,
+            re_entry_window_secs=re_entry_window_secs,
+        )
         
         # Lock for thread-safe Re-ID inference.
         # The Re-ID model is shared across camera threads; PyTorch eval-mode
         # forward() is generally thread-safe but we protect it with a lock
         # to prevent subtle race conditions on the same tensor buffers.
         self._reid_lock = threading.Lock()
+
+        # Per-camera track state for departure detection.
+        # Structure: camera_name -> {local_track_id -> (global_id, feature_vector)}
+        # Updated at the end of every process_frame() call.  Comparing this dict
+        # against the current frame's active track IDs reveals which tracks just
+        # disappeared so their last embedding can be stored as departure_features
+        # in the gallery for use in future same-camera re-entry matching.
+        self._prev_frame_tracks: Dict[str, Dict[int, Tuple[int, np.ndarray]]] = defaultdict(dict)
+
+        # Rolling buffer of the last 5 non-zero embeddings per (camera, local_track_id).
+        # Updated EVERY FRAME (including edge/partial frames close to the door).
+        # KEY PURPOSE: when a person walks toward a door and exits, the last 5 non-zero
+        # embeddings are side/back transitional views (scored 0.55-0.75 vs re-entry)
+        # rather than the garbage Kalman-prediction crops produced during BotSort's
+        # 3-second ghost-tracking period (scored 0.20-0.30 vs re-entry).
+        # When departure fires, this buffer replaces the ghost-frame embedding.
+        # camera_name -> {local_track_id -> [feat_t-4, t-3, t-2, t-1, t_last_real]}
+        self._pre_departure_buffer: Dict[str, Dict[int, List[np.ndarray]]] = defaultdict(dict)
+        
+        # Tracklet Stabilization buffer stores features before running Re-ID matching
+        self.MIN_STABLE_FRAMES = 15
+        self._pending_tracks: Dict[str, Dict[int, Dict[str, Any]]] = defaultdict(dict)
         
         # Colors for visualization
         np.random.seed(42)
@@ -766,28 +1122,154 @@ class MultiCameraTracker:
         # Get all active local track IDs in this frame to prevent gallery collisions
         active_local_ids = {track_info["track_id"] for track_info in local_tracks}
 
-        # Identify detections at the frame border — these are partial/occluded views.
-        # Their noisy embeddings must NOT update existing gallery entries (Bug #2 fix).
-        # They can still CREATE new gallery entries and MATCH existing ones.
-        EDGE_MARGIN = 30  # pixels from any frame border
+        # Identify partial/occluded detections.  Two signals are used:
+        #
+        # 1. Border proximity (adaptive asymmetric margins):
+        #    Bottom edge gets 12% of frame height — people enter from bottom
+        #    in top-mounted CCTV cameras far more than from sides.
+        #    Left/right/top use 5%.  All floors ensure a minimum pixel count
+        #    so the check still works at unusual resolutions.
+        #
+        # 2. Aspect ratio (h/w < 1.5):  a full standing adult viewed from CCTV
+        #    height is typically 2.5–3.5:1 (tall).  A head-only or
+        #    head+shoulders crop from a top-down camera is ~0.8–1.4:1 (nearly
+        #    square).  Any bbox that is more wide than ~1.5× its height is almost
+        #    certainly a partial-body crop even when located in the frame centre.
+        #
+        # Partial detections:
+        #   • Do NOT update existing gallery entries (noisy embeddings corrupt them)
+        #   • DO match against gallery using a lenient threshold (edge_match_threshold)
+        #   • CAN create new gallery entries (so the track remains visible)
         frame_h, frame_w = frame.shape[:2]
+        MARGIN_X     = max(40, int(frame_w * 0.05))   # left / right — 5% of width
+        MARGIN_Y_TOP = max(30, int(frame_h * 0.05))   # top — 5% of height
+        MARGIN_Y_BOT = max(80, int(frame_h * 0.12))   # bottom — 12% (primary entry edge)
 
         global_tracks = []
         for track_info, track_feature in zip(local_tracks, features):
             x1, y1, x2, y2 = map(int, track_info["bbox"])
+            bbox = np.array([x1, y1, x2, y2], dtype=np.float32)
+            w_box = max(1, x2 - x1)
+            h_box = max(1, y2 - y1)
+            aspect = h_box / w_box  # full standing adult ≈ 2.5–3.5
+
             is_edge = (
-                x1 < EDGE_MARGIN or
-                x2 > frame_w - EDGE_MARGIN or
-                y1 < EDGE_MARGIN or
-                y2 > frame_h - EDGE_MARGIN
+                x1 < MARGIN_X or                    # left border
+                x2 > frame_w - MARGIN_X or          # right border
+                y1 < MARGIN_Y_TOP or                # top border
+                y2 > frame_h - MARGIN_Y_BOT or      # bottom border (larger margin)
+                aspect < 1.5                        # partial body (head-only / torso-only)
             )
-            global_id = self.gallery.find_or_create_global_id(
-                track_info["track_id"], track_feature, camera_name,
-                active_local_ids,
-                update_gallery=not is_edge   # edge detections never corrupt gallery
-            )
-            global_tracks.append((global_id, track_info["bbox"]))
-        
+
+            local_id = track_info["track_id"]
+            
+            with self.gallery.lock:
+                already_mapped = local_id in self.gallery.local_to_global[camera_name]
+                
+            if already_mapped:
+                global_id = self.gallery.find_or_create_global_id(
+                    local_id, track_feature, camera_name,
+                    active_local_ids,
+                    update_gallery=not is_edge,  # partial detections never corrupt gallery
+                    is_edge=is_edge,             # enables lenient threshold for matching
+                    bbox=bbox,                   # spatial fallback + position tracking
+                )
+                global_tracks.append((global_id, track_info["bbox"]))
+            else:
+                # ── Tracklet Stabilization ──────────────
+                # Accumulate frames for new tracks before deciding their Global ID
+                cam_pending = self._pending_tracks[camera_name]
+                if local_id not in cam_pending:
+                    cam_pending[local_id] = {"features": [], "stable_count": 0, "bboxes": []}
+                
+                t_data = cam_pending[local_id]
+                if np.any(track_feature != 0):
+                    t_data["features"].append(track_feature.copy())
+                    t_data["bboxes"].append(bbox)
+                    if not is_edge:
+                        t_data["stable_count"] += 1
+                        
+                # Check for maturity: 15 stable frames, or 45 frames fallback (e.g. forever blocked)
+                if t_data["stable_count"] >= self.MIN_STABLE_FRAMES or len(t_data["features"]) >= 45:
+                    valid_feats = t_data["features"]
+                    if valid_feats:
+                        mean_feat = np.mean(valid_feats, axis=0)
+                        query_feat = mean_feat / (np.linalg.norm(mean_feat) + 1e-8)
+                    else:
+                        query_feat = track_feature
+                        
+                    global_id = self.gallery.find_or_create_global_id(
+                        local_id, query_feat, camera_name,
+                        active_local_ids,
+                        update_gallery=True,  
+                        is_edge=False,        # Query is now a stable mean
+                        bbox=bbox,            
+                    )
+                    
+                    # Backfill gallery to immediately populate robust historical views
+                    if valid_feats:
+                        with self.gallery.lock:
+                            if global_id in self.gallery.persons:
+                                person = self.gallery.persons[global_id]
+                                step = max(1, len(valid_feats) // 10)
+                                for f in valid_feats[::step]:
+                                    person.add_feature(f, camera_name, is_stable=True)
+                            
+                    del cam_pending[local_id]
+                    global_tracks.append((global_id, track_info["bbox"]))
+                else:
+                    global_tracks.append(("?", track_info["bbox"]))
+
+        # ── Pre-departure buffer update ─────────────────────────────────────
+        # Maintain a rolling buffer of the last 5 non-zero embeddings per local
+        # track, updated EVERY FRAME including edge/partial frames.
+        # Must run BEFORE departure detection so when a track disappears this
+        # frame, the buffer already holds its last-seen appearance (near-door
+        # side/back views) not the ghost-tracking garbage in _prev_frame_tracks.
+        cam_buf = self._pre_departure_buffer[camera_name]
+        for i in range(len(local_tracks)):
+            track_id = local_tracks[i]["track_id"]
+            feat = features[i]
+            if np.any(feat != 0):               # skip zero-vectors (off-frame crops)
+                if track_id not in cam_buf:
+                    cam_buf[track_id] = []
+                cam_buf[track_id].append(feat.copy())
+                if len(cam_buf[track_id]) > 5:  # keep only the last 5
+                    cam_buf[track_id] = cam_buf[track_id][-5:]
+
+        # ── Departure detection ──────────────────────────────────────────────
+        # Compare this frame's active local track IDs against the previous
+        # frame's dict.  Any track ID present last frame but absent now has
+        # just disappeared (BotSort dropped the track after track_buffer frames).
+        # Use the pre-departure buffer (actual last-seen walking frames) instead
+        # of the ghost tracking embedding in _prev_frame_tracks (stale+garbage).
+        prev_tracks = self._prev_frame_tracks.get(camera_name, {})
+        current_local_ids = {t["track_id"] for t in local_tracks}
+        for departed_local_id, (departed_gid, departed_feat) in prev_tracks.items():
+            if departed_local_id not in current_local_ids:
+                # Retrieve and consume the pre-departure buffer for this track.
+                departure_buf = cam_buf.pop(departed_local_id, None)
+                if departure_buf:
+                    # Store up to 5 buffered embeddings — captures the last real
+                    # visible frames (side/back near door), not ghost predictions.
+                    # These score 0.55-0.75 vs re-entry vs 0.38-0.52 for sitting.
+                    self.gallery.record_departure(departed_gid, departure_buf)
+                elif np.any(departed_feat != 0):
+                    # Fallback: ghost-frame embedding only if buffer is empty
+                    self.gallery.record_departure(departed_gid, [departed_feat])
+
+        # Cleanup stale pending tracks that dropped before maturing
+        cam_pending = self._pending_tracks[camera_name]
+        pending_to_remove = [tid for tid in cam_pending if tid not in current_local_ids]
+        for tid in pending_to_remove:
+            del cam_pending[tid]
+
+        # Update per-camera track state for next frame's departure detection
+        self._prev_frame_tracks[camera_name] = {
+            local_tracks[i]["track_id"]: (global_tracks[i][0], features[i])
+            for i in range(len(local_tracks))
+        }
+
         # Draw results on the enhanced frame so the visualisation shows the
         # brightness-corrected view that YOLO actually used for detection.
         annotated_frame = self.draw_tracks(enhanced_frame.copy(), global_tracks, camera_name)
@@ -797,13 +1279,16 @@ class MultiCameraTracker:
     def draw_tracks(
         self, 
         frame: np.ndarray, 
-        tracks: List[Tuple[int, np.ndarray]], 
+        tracks: List[Tuple[Union[int, str], np.ndarray]], 
         camera_name: str
     ) -> np.ndarray:
         """Draw tracking results on frame."""
         for global_id, bbox in tracks:
             x1, y1, x2, y2 = map(int, bbox)
-            color = tuple(map(int, self.colors[global_id % len(self.colors)]))
+            if isinstance(global_id, str):
+                color = (128, 128, 128)
+            else:
+                color = tuple(map(int, self.colors[global_id % len(self.colors)]))
             
             # Bounding box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
