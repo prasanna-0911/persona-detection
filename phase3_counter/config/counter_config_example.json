@@ -1,0 +1,76 @@
+{
+  "_readme": "EXAMPLE CONFIG — shows all supported fields. Copy to counter_config.json and edit.",
+
+  "room_name": "Conference Room B",
+
+  "yolo_model"  : "yolov8m.pt",
+  "conf"        : 0.45,
+  "imgsz"       : 960,
+  "device"      : "cuda",
+  "display"     : true,
+  "save_output" : true,
+  "output_dir"  : "phase3_counter/outputs",
+
+  "logging": {
+    "log_dir"    : "phase3_counter/logs",
+    "flush_every": 10
+  },
+
+  "cameras": [
+    {
+      "_comment": "Example 1: Camera watching ONE door.",
+      "name"  : "Camera_1",
+      "source": "rtsp://admin:pass@192.168.1.100:554/Streaming/Channels/101",
+      "lines": [
+        {
+          "door_id"  : "Door_A",
+          "door_name": "Main Entrance",
+          "start"    : [320, 200],
+          "end"      : [320, 700],
+          "_inside_sign_note": "+1 = left side of line is INSIDE room. -1 = right side is INSIDE room. Set by calibration tool.",
+          "inside_sign": 1,
+          "_band_width_note": "Crossing zone in pixels. Person must fully cross this band to register a count. Default 25.",
+          "band_width" : 25
+        }
+      ]
+    },
+    {
+      "_comment": "Example 2: One camera watching TWO doors (e.g. wide-angle camera).",
+      "name"  : "Camera_2",
+      "source": "rtsp://admin:pass@192.168.1.101:554/Streaming/Channels/101",
+      "lines": [
+        {
+          "door_id"  : "Door_B",
+          "door_name": "Side Entrance Left",
+          "start"    : [150, 150],
+          "end"      : [150, 600],
+          "inside_sign": 1,
+          "band_width" : 25
+        },
+        {
+          "door_id"  : "Door_C",
+          "door_name": "Side Entrance Right",
+          "start"    : [500, 150],
+          "end"      : [500, 600],
+          "inside_sign": -1,
+          "band_width" : 25
+        }
+      ]
+    },
+    {
+      "_comment": "Example 3: Camera source is a local video file (for testing).",
+      "name"  : "Camera_3",
+      "source": "phase3_counter/test_footage/door_test_3.mp4",
+      "lines": [
+        {
+          "door_id"  : "Door_D",
+          "door_name": "Emergency Exit",
+          "start"    : [100, 300],
+          "end"      : [900, 300],
+          "inside_sign": -1,
+          "band_width" : 30
+        }
+      ]
+    }
+  ]
+}

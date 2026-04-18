@@ -1,0 +1,52 @@
+# botsort_counter.yaml
+# BoT-SORT tracker configuration for the Room Occupancy Counter.
+#
+# Based on botsort_custom.yaml from the persona-detection project.
+# Kept in phase3_counter/config/ to make this module self-contained
+# without modifying any file in the parent project.
+#
+# Key difference from the Re-ID project:
+#   with_reid: False  →  Pure motion tracking. No appearance features
+#                         needed. Only IoU + Kalman filter used.
+#                         Lighter, faster, zero Re-ID dependency.
+#
+# Why BoT-SORT for counting (vs DeepSORT / ByteTrack):
+#   - Camera Motion Compensation (sparseOptFlow) handles wall-mounted
+#     camera shake without losing track IDs near the door line.
+#   - Higher ID consistency than DeepSORT / ByteTrack near the crossing
+#     zone (fewer ID switches = fewer missed or double counts).
+#   - Native Ultralytics integration — no extra installs.
+
+tracker_type: botsort
+
+# ── Detection confidence gates ────────────────────────────────────────────
+track_high_thresh: 0.45     # Min conf for primary (high-quality) association
+track_low_thresh:  0.20     # Min conf for secondary (rescue) association
+new_track_thresh:  0.50     # Min conf to START a new track
+
+# ── Track lifecycle ───────────────────────────────────────────────────────
+track_buffer: 90            # Frames to keep a lost track alive.
+                            # 90 frames @ 30fps = 3 seconds.
+                            # This handles people pausing in a doorway or
+                            # being briefly occluded by the door frame
+                            # without losing their track ID mid-crossing.
+
+# ── Association ───────────────────────────────────────────────────────────
+match_thresh: 0.65          # IoU distance threshold for detection→track match.
+                            # Lower = stricter. Reduces ID swaps when two
+                            # people pass through the door simultaneously.
+
+fuse_score: True            # Fuse YOLO confidence into association cost
+
+# ── BoT-SORT specific ─────────────────────────────────────────────────────
+gmc_method: sparseOptFlow   # Global Motion Compensation.
+                            # Compensates for subtle camera movement
+                            # (vibration, HVAC, etc.) in wall-mounted cameras.
+
+proximity_thresh:   0.5
+appearance_thresh:  0.25
+
+# ── Re-ID ────────────────────────────────────────────────────────────────
+with_reid: False            # DISABLED — counting only, no identity tracking.
+                            # All appearance-based matching is turned off.
+                            # Pure IoU + Kalman filter tracking.

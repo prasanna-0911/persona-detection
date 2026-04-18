@@ -1,0 +1,29 @@
+# phase3_counter — Git ignore rules
+# Runtime-generated files that should NOT go to GitHub
+
+# ── Log files (generated at runtime) ─────────────────────────────
+logs/*.csv
+logs/*.json
+
+# ── Output videos (can be large, regenerated from source) ────────
+outputs/*.avi
+outputs/*.mp4
+outputs/*.mkv
+
+# ── Test footage (your personal video files — keep local) ─────────
+test_footage/*.mp4
+test_footage/*.avi
+test_footage/*.mkv
+test_footage/*.mov
+
+# ── Python cache ──────────────────────────────────────────────────
+__pycache__/
+core/__pycache__/
+utils/__pycache__/
+*.pyc
+*.pyo
+
+# ── Keep the placeholder README files in logs/ outputs/ test_footage/
+!logs/README.md
+!outputs/README.md
+!test_footage/README.md
