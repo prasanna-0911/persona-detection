@@ -92,7 +92,7 @@ def _draw_state(canvas: np.ndarray, state: Dict,
         _draw_instructions(display, [
             "Step 1 / 3 — LEFT-CLICK on one end of the door line.",
             "              (place the point at the door frame edge)",
-            "  [r] reset   [q] quit",
+            "  [SPACE] pause/play   [r] reset   [q] quit",
         ])
 
     elif step == 'pt2':
@@ -148,7 +148,7 @@ def _draw_state(canvas: np.ndarray, state: Dict,
 # Main calibration function
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def run_calibration(config_path: str) -> bool:
+def run_calibration(config_path: str, play_video: bool = False) -> bool:
     """
     Interactive calibration loop. Iterates over every camera × line in
     the config and lets the user define each virtual door line.
@@ -187,10 +187,13 @@ def run_calibration(config_path: str) -> bool:
             if ret and frame is not None:
                 canvas = frame.copy()
                 break
-        vs.release()
+        
+        if not play_video:
+            vs.release()
 
         if canvas is None:
             print(f"   ❌ Could not read a frame from {cam_name}. Skipping.")
+            if play_video: vs.release()
             continue
 
         print(f"   Frame grabbed: {canvas.shape[1]}x{canvas.shape[0]}")
@@ -203,69 +206,82 @@ def run_calibration(config_path: str) -> bool:
             print(f"\n   🚪  Defining line for: {door_name} ({door_id})")
 
             window_name = f"Calibrate — {cam_name} — {door_name}"
-            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(window_name, min(canvas.shape[1], 1280),
-                             min(canvas.shape[0], 720))
+            cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+
+            h, w = canvas.shape[:2]
+            scale = min(1280.0 / w, 720.0 / h)
+            if scale > 1.0: 
+                scale = 1.0  # dont upscale small images
+            new_w, new_h = int(w * scale), int(h * scale)
 
             # ── Interaction state ────────────────────────────────────────────
-            state = {'step': 'pt1', 'pt1': None, 'pt2': None, 'inside_pt': None}
+            state = {'step': 'pt1', 'pt1': None, 'pt2': None, 'inside_pt': None, 'scale': scale, 'pause_vid': False}
 
             def mouse_callback(event, x, y, flags, param):
                 # Only process LBUTTONDOWN — NOT LBUTTONUP.
-                # A single click fires both events at the same (x, y).
-                # If we also handle LBUTTONUP, the second event would run
-                # the next step's handler with the previous click's coords,
-                # causing the 'inside' handler to receive pt2's coordinates
-                # (which are exactly on the line → cross product = 0 always).
                 if event != cv2.EVENT_LBUTTONDOWN:
                     return
                 s = param
+                sc = s.get('scale', 1.0)
+                orig_x, orig_y = int(x / sc), int(y / sc)
 
                 if s['step'] == 'pt1':
-                    s['pt1'] = (x, y)
+                    s['pt1'] = (orig_x, orig_y)
                     s['step'] = 'pt2'
-                    print(f"   ✔  Point 1 set at {(x, y)} — now click Point 2")
+                    s['pause_vid'] = True  # Auto-pause video after 1st click for stability
+                    print(f"   ✔  Point 1 set at {(orig_x, orig_y)} — now click Point 2")
 
                 elif s['step'] == 'pt2':
-                    s['pt2'] = (x, y)
+                    s['pt2'] = (orig_x, orig_y)
                     if s['pt1'] == s['pt2']:
                         print("   ⚠️  Both points are the same. Click a different location.")
                         s['step'] = 'pt2'
                     else:
                         s['step'] = 'inside'
-                        print(f"   ✔  Point 2 set at {(x, y)} — now click INSIDE the room")
+                        print(f"   ✔  Point 2 set at {(orig_x, orig_y)} — now click INSIDE the room")
 
                 elif s['step'] == 'inside':
-                    sign = _cross_sign((x, y), s['pt1'], s['pt2'])
+                    sign = _cross_sign((orig_x, orig_y), s['pt1'], s['pt2'])
                     if sign == 0:
                         print("   ⚠️  Click is exactly on the line. Click clearly inside the room.")
                         return
-                    s['inside_pt']   = (x, y)
+                    s['inside_pt']   = (orig_x, orig_y)
                     s['inside_sign'] = sign
                     s['step']        = 'done'
-                    print(f"   ✔  Inside point set at {(x, y)} — press [s] to save")
+                    print(f"   ✔  Inside point set at {(orig_x, orig_y)} — press [s] to save")
 
             # ── Interaction loop ─────────────────────────────────────────────
-            # IMPORTANT (Windows): show the window FIRST, then register the
-            # mouse callback. On Windows, callbacks registered before the first
-            # imshow() call are silently ignored by the Win32 event loop.
             quit_all = False
             first_draw = _draw_state(canvas, state, door_name, cam_name)
-            cv2.imshow(window_name, first_draw)
+            cv2.imshow(window_name, cv2.resize(first_draw, (new_w, new_h)))
             cv2.waitKey(200)          # let the window fully appear + gain focus
             cv2.setMouseCallback(window_name, mouse_callback, state)
-            print("   👆  Window ready. Click in the window to begin.")
+            
+            help_msg = "   👆  Window ready. Click in the window to begin."
+            if play_video:
+                help_msg += "  (Press [SPACE] to pause/play video anytime)"
+            print(help_msg)
 
             while True:
+                if play_video and not state.get('pause_vid', False):
+                    ret, new_frame = vs.read()
+                    if ret and new_frame is not None:
+                        canvas = new_frame.copy()
+
                 display = _draw_state(canvas, state, door_name, cam_name)
-                cv2.imshow(window_name, display)
+                display_resized = cv2.resize(display, (new_w, new_h))
+                cv2.imshow(window_name, display_resized)
                 key = cv2.waitKey(30) & 0xFF
 
                 if key == ord('r'):
                     # Reset this line
                     state.update({'step': 'pt1', 'pt1': None, 'pt2': None,
-                                  'inside_pt': None})
+                                  'inside_pt': None, 'pause_vid': False})
                     print("   🔄  Reset. Start over for this line.")
+
+                elif key == ord(' '):
+                    state['pause_vid'] = not state.get('pause_vid', False)
+                    print(f"   ⏯️  Video {'paused' if state.get('pause_vid') else 'playing'}.")
 
                 elif key == ord('s') and state['step'] == 'done':
                     # Save to config
@@ -292,7 +308,11 @@ def run_calibration(config_path: str) -> bool:
                 with open(config_path, 'w', encoding='utf-8') as f:
                     json.dump(cfg, f, indent=2, ensure_ascii=False)
                 print(f"\n📁 Config saved (partial): {config_path}")
+                if play_video: vs.release()
                 return False
+
+        if play_video: 
+            vs.release()
 
     # ── Write updated config ──────────────────────────────────────────────────
     with open(config_path, 'w', encoding='utf-8') as f:

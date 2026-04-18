@@ -455,6 +455,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help='Path to counter_config.json  (default: %(default)s)')
     p.add_argument('--calibrate', action='store_true',
                    help='Run the interactive line calibration tool and exit.')
+    p.add_argument('--calib-vid', action='store_true',
+                   help='Play the video feed during calibration instead of a static frame.')
     p.add_argument('--initial-count', type=int, default=0,
                    help='Seed occupancy with N people already in the room '
                         '(useful when starting mid-day).  Default: 0')
@@ -489,7 +491,7 @@ def main():
     if args.calibrate:
         print("\n🔧 Starting line calibration tool...")
         from utils.line_calibrator import run_calibration
-        run_calibration(cfg_path)
+        run_calibration(cfg_path, play_video=args.calib_vid)
         return
 
     # ── Banner ─────────────────────────────────────────────────────────────────

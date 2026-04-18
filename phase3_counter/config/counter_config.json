@@ -15,7 +15,7 @@
   "cameras": [
     {
       "name": "Camera_1",
-      "source": "Recording_4.mp4",
+      "source": "Untitled design.mp4",
       "_source_note": "Replace with RTSP URL, e.g. rtsp://admin:pass@192.168.1.100:554/Streaming/Channels/101",
       "lines": [
         {
@@ -26,11 +26,11 @@
             0
           ],
           "end": [
-            1,
-            0
+            0,
+            1
           ],
           "_calibration_note": "These coordinates are placeholders. Run: python phase3_counter/counter_main.py --calibrate",
-          "inside_sign": 1,
+          "inside_sign": -1,
           "band_width": 25
         }
       ]
