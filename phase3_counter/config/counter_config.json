@@ -22,12 +22,12 @@
           "door_id": "Door_A",
           "door_name": "Main Entrance",
           "start": [
-            0,
-            0
+            62,
+            669
           ],
           "end": [
-            0,
-            1
+            1170,
+            1093
           ],
           "_calibration_note": "These coordinates are placeholders. Run: python phase3_counter/counter_main.py --calibrate",
           "inside_sign": -1,

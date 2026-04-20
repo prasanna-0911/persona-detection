@@ -27,6 +27,7 @@ import sys
 import json
 import copy
 import cv2
+import ctypes
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 
@@ -208,8 +209,20 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
             window_name = f"Calibrate — {cam_name} — {door_name}"
             cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
 
+            # Dynamically get the Windows screen size to fit-to-screen perfectly
+            try:
+                user32 = ctypes.windll.user32
+                screen_w = user32.GetSystemMetrics(0)
+                screen_h = user32.GetSystemMetrics(1)
+            except:
+                screen_w, screen_h = 1920, 1080
+
+            # Scale to 90% of screen to leave room for taskbar/window borders
+            max_w = screen_w
+            max_h = screen_h
+
             h, w = canvas.shape[:2]
-            scale = min(1280.0 / w, 720.0 / h)
+            scale = min(max_w / w, max_h / h)
             if scale > 1.0: 
                 scale = 1.0  # dont upscale small images
             new_w, new_h = int(w * scale), int(h * scale)

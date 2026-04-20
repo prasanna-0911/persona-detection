@@ -230,6 +230,7 @@ def _camera_worker(cam_cfg: Dict,
                    yolo_model: str,
                    conf: float,
                    imgsz: int,
+                   device: str,
                    botsort_cfg: str,
                    aggregator: RoomOccupancyAggregator,
                    logger: EventLogger,
@@ -351,8 +352,7 @@ def _camera_worker(cam_cfg: Dict,
 
             # ── Run BoT-SORT tracking ──────────────────────────────────────
             # with_reid=False in botsort_counter.yaml → pure motion tracking
-            results = model.track(
-                frame,
+            track_kwargs = dict(
                 persist    = True,
                 tracker    = botsort_cfg,
                 classes    = [0],           # class 0 = person in COCO
@@ -360,6 +360,10 @@ def _camera_worker(cam_cfg: Dict,
                 imgsz      = imgsz,
                 verbose    = False,
             )
+            if device:
+                track_kwargs['device'] = device
+
+            results = model.track(frame, **track_kwargs)
 
             # ── Extract tracks ─────────────────────────────────────────────
             tracks: List[Tuple[int, np.ndarray]] = []
@@ -508,6 +512,7 @@ def main():
     yolo_model  = cfg.get('yolo_model', 'yolov8m.pt')
     conf        = cfg.get('conf',  0.45)
     imgsz       = cfg.get('imgsz', 960)
+    device      = cfg.get('device', '')
     display     = cfg.get('display', True) and not args.no_display
     save_output = cfg.get('save_output', True) and not args.no_save
     output_dir  = cfg.get('output_dir', 'phase3_counter/outputs')
@@ -538,6 +543,7 @@ def main():
                 yolo_model  = yolo_model,
                 conf        = conf,
                 imgsz       = imgsz,
+                device      = device,
                 botsort_cfg = botsort_cfg,
                 aggregator  = aggregator,
                 logger      = logger,
