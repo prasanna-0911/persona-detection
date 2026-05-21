@@ -255,6 +255,8 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
 
             # ── Interaction loop ─────────────────────────────────────────────
             quit_all = False
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window_name, new_w, new_h)
             first_draw = _draw_state(canvas, state, door_name, cam_name)
             cv2.imshow(window_name, cv2.resize(first_draw, (new_w, new_h)))
             cv2.waitKey(200)          # let the window fully appear + gain focus
