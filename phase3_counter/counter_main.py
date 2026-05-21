@@ -260,7 +260,8 @@ def _camera_worker(cam_cfg: Dict,
                    display: bool,
                    save_output: bool,
                    output_dir: str,
-                   max_frames: Optional[int]) -> None:
+                   max_frames: Optional[int],
+                   room_name: str = 'Room') -> None:
     """
     Thread target: process one camera stream end-to-end.
 
@@ -279,15 +280,7 @@ def _camera_worker(cam_cfg: Dict,
         if 'crossing_point' not in line:
             line['crossing_point'] = cam_crossing_point
 
-    # ── Validate calibration ───────────────────────────────────────────────────
-    crosser = DoorLineCrosser(lines_cfg)
-    if not crosser.is_calibrated():
-        print(f"\n⚠️  [{cam_name}] Virtual lines not calibrated (coordinates are [0,0]).")
-        print(f"    Run:  python phase3_counter/counter_main.py --calibrate")
-        print(f"    Skipping {cam_name}.\n")
-        return
-
-    # ── Initialize room region (for multi-room camera support) ───────────────────
+    # ── Initialize room region (for multi-room camera support / standalone counting) ─
     room_region_cfg = cam_cfg.get('room_region', {})
     room_region = None
 
@@ -295,10 +288,23 @@ def _camera_worker(cam_cfg: Dict,
         try:
             polygon = [tuple(p) for p in room_region_cfg['polygon']]
             if len(polygon) >= 3:
-                room_region = RoomRegion(polygon)
+                room_region = RoomRegion(polygon, room_name=room_name)
                 print(f"   [{cam_name}] Room region: {len(polygon)}-point polygon")
         except Exception as e:
             print(f"   [{cam_name}] ⚠️ Room region invalid: {e}")
+
+    # ── Validate calibration ───────────────────────────────────────────────────
+    crosser = DoorLineCrosser(lines_cfg)
+    if not crosser.is_calibrated():
+        if room_region is not None and room_region.is_valid():
+            # No door lines, but room region exists — use polygon-based counting
+            print(f"   [{cam_name}] No door lines — using room region polygon for counting")
+        else:
+            print(f"\n⚠️  [{cam_name}] No door lines and no room region configured.")
+            print(f"    Either calibrate lines with:  python phase3_counter/counter_main.py --calibrate")
+            print(f"    Or define a room region with:  python phase3_counter/counter_main.py --calibrate-region")
+            print(f"    Skipping {cam_name}.\n")
+            return
 
     # ── Initialize direction tracker for movement detection ─────────────────────
     direction_tracker = MovementDirectionTracker()
@@ -432,20 +438,29 @@ def _camera_worker(cam_cfg: Dict,
             if has_direction_filter:
                 velocity_dict = direction_tracker.update(tracks)
 
-            # ── Check line crossings (all tracks, unfiltered) ───────────────
-            events = crosser.update(tracks, velocity_dict=velocity_dict)
+            # ── Detect entry/exit events ──────────────────────────────────
+            lines_calibrated = crosser.is_calibrated()
+            has_region = room_region is not None and room_region.is_valid()
 
-            # ── Filter events by room region (if defined) ───────────────────
-            # An entry only counts if the person ends up inside the polygon;
-            # an exit only counts if the person ends up outside.
-            if room_region is not None:
-                events = [
-                    ev for ev in events
-                    if (ev['event'] == 'ENTRY' and
-                        room_region.is_point_inside(ev['foot'][0], ev['foot'][1])) or
-                       (ev['event'] == 'EXIT' and
-                        not room_region.is_point_inside(ev['foot'][0], ev['foot'][1]))
-                ]
+            if lines_calibrated:
+                # Use door-line crossing detection
+                events = crosser.update(tracks, velocity_dict=velocity_dict)
+
+                # Filter events by room region (if defined)
+                if has_region:
+                    events = [
+                        ev for ev in events
+                        if (ev['event'] == 'ENTRY' and
+                            room_region.is_point_inside(ev['foot'][0], ev['foot'][1])) or
+                           (ev['event'] == 'EXIT' and
+                            not room_region.is_point_inside(ev['foot'][0], ev['foot'][1]))
+                    ]
+            elif has_region:
+                # Standalone polygon-based counting (no door lines)
+                cp = cam_cfg.get('crossing_point', 'foot')
+                events = room_region.update_events(tracks, crossing_point=cp)
+            else:
+                events = []
 
             # ── Process events ─────────────────────────────────────────────
             now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
@@ -601,6 +616,7 @@ def main():
     log_cfg     = cfg.get('logging', {})
     log_dir     = log_cfg.get('log_dir', 'phase3_counter/logs')
     flush_every = log_cfg.get('flush_every', 10)
+    room_name   = cfg.get('room_name', 'Room')
     cameras     = cfg.get('cameras', [])
 
     if not cameras:
@@ -633,6 +649,7 @@ def main():
                 save_output = save_output,
                 output_dir  = output_dir,
                 max_frames  = args.max_frames,
+                room_name   = room_name,
             ),
             daemon    = True,
             name      = f"cam-{cam_cfg.get('name', 'unknown')}",

@@ -1,14 +1,21 @@
 """
 RoomRegion — Polygon-based room interior region detection.
 
-This module provides polygon-based room region detection to handle cases
-where a camera can see multiple rooms. Only people inside the defined
-room polygon are counted.
+This module provides polygon-based room region detection for two use cases:
+
+1. **Event filter** (used with door lines): Only count people inside the polygon.
+2. **Standalone counter** (no door lines needed): Track when people enter/exit the
+   polygon boundary itself, generating ENTRY/EXIT events automatically.
 
 Usage:
-    region = RoomRegion(polygon_points)  # List of (x, y) tuples
+    # As event filter (with door lines):
+    region = RoomRegion(polygon_points)
     is_inside = region.is_point_inside(x, y)
     inside_tracks = region.filter_tracks(tracks)
+
+    # As standalone counter (no door lines):
+    region = RoomRegion(polygon_points)
+    events = region.update_events(tracks, crossing_point='foot')
 """
 
 import numpy as np
@@ -24,7 +31,7 @@ class RoomRegion:
     count people inside the specified room region.
     """
 
-    def __init__(self, polygon: List[Tuple[int, int]]):
+    def __init__(self, polygon: List[Tuple[int, int]], room_name: str = "Room"):
         """
         Initialize room region with polygon vertices.
 
@@ -32,12 +39,16 @@ class RoomRegion:
             polygon: List of (x, y) tuples defining the polygon vertices
                     in clockwise or counter-clockwise order.
                     Must have at least 3 points.
+            room_name: Label used in generated events (default "Room").
         """
         if len(polygon) < 3:
             raise ValueError("Room region polygon must have at least 3 points")
 
         self.polygon = polygon
+        self._room_name = room_name
         self._cached_edges = self._precompute_edges()
+        # Per-track inside/outside state for polygon boundary crossing
+        self._prev_inside: Dict[int, bool] = {}
 
     def _precompute_edges(self):
         """Precompute normalized edge vectors and constants for point-in-polygon test."""
@@ -182,12 +193,90 @@ class RoomRegion:
         )
 
     @staticmethod
-    def from_dict(config: Dict) -> Optional['RoomRegion']:
+    def _get_crossing_point(bbox: Tuple[int, int, int, int],
+                             crossing_point: str) -> Tuple[int, int]:
+        """Compute the reference point from a bounding box."""
+        x1, y1, x2, y2 = map(int, bbox)
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        if crossing_point == 'foot':
+            return (cx, y2)
+        elif crossing_point == 'center':
+            return (cx, cy)
+        elif crossing_point == 'top':
+            return (cx, y1)
+        elif crossing_point == 'mid-foot':
+            return (cx, (cy + y2) // 2)
+        return (cx, y2)
+
+    def update_events(self, tracks: List[Tuple[int, np.ndarray]],
+                       crossing_point: str = 'foot') -> List[Dict]:
+        """
+        Detect entry/exit events by tracking when people cross the polygon boundary.
+
+        This replaces the door-line crosser when no virtual lines are configured.
+        Tracks each person's inside/outside state across frames and generates
+        events on state transitions.
+
+        Args:
+            tracks: List of (track_id, bbox) tuples.
+            crossing_point: Which point on the bbox to use ('foot', 'center',
+                           'top', or 'mid-foot').
+
+        Returns:
+            List of event dicts matching the same format as DoorLineCrosser:
+                door_id   (str): "Room_Entry"
+                door_name (str): Room name from constructor
+                event     (str): "ENTRY" or "EXIT"
+                track_id  (int): Track ID
+                foot      (tuple): Reference point used for detection
+        """
+        events: List[Dict] = []
+        active_ids = {t[0] for t in tracks}
+
+        # Cleanup stale tracks
+        vanished = [tid for tid in self._prev_inside if tid not in active_ids]
+        for tid in vanished:
+            del self._prev_inside[tid]
+
+        for track_id, bbox in tracks:
+            point = self._get_crossing_point(bbox, crossing_point)
+            is_inside = self.is_point_inside(point[0], point[1])
+
+            if track_id in self._prev_inside:
+                was_inside = self._prev_inside[track_id]
+                if was_inside and not is_inside:
+                    events.append({
+                        'door_id'  : 'Room_Entry',
+                        'door_name': self._room_name,
+                        'event'    : 'EXIT',
+                        'track_id' : track_id,
+                        'foot'     : point,
+                    })
+                elif not was_inside and is_inside:
+                    events.append({
+                        'door_id'  : 'Room_Entry',
+                        'door_name': self._room_name,
+                        'event'    : 'ENTRY',
+                        'track_id' : track_id,
+                        'foot'     : point,
+                    })
+
+            self._prev_inside[track_id] = is_inside
+
+        return events
+
+    def reset(self):
+        """Clear per-track state. Call between sessions."""
+        self._prev_inside.clear()
+
+    @staticmethod
+    def from_dict(config: Dict, room_name: str = "Room") -> Optional['RoomRegion']:
         """
         Create RoomRegion from configuration dict.
 
         Args:
             config: Dict containing 'polygon' key with list of [x, y] points
+            room_name: Label used in generated events
 
         Returns:
             RoomRegion instance or None if not configured
@@ -200,7 +289,7 @@ class RoomRegion:
         polygon = [tuple(point) for point in polygon_list]
 
         try:
-            return RoomRegion(polygon)
+            return RoomRegion(polygon, room_name=room_name)
         except ValueError:
             return None
 

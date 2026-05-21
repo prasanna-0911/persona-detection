@@ -69,12 +69,18 @@ The system can filter false counts caused by backward movement through doors.
 | `"exit"` | Only count forward movement OUT OF the room |
 
 ### Room Region (Polygon)
-When a camera can see multiple rooms, you can define a room interior polygon to only count people inside that specific area.
 
-**How it works:**
-- Draw a polygon defining the room interior
-- Only people with foot position inside the polygon are counted
-- People in other visible rooms are ignored
+You can use a room region polygon in two ways:
+
+**Mode 1 — Event filter (with door lines):** Only count crossing events for people inside the defined room area. Use this when you have door lines configured but your camera sees multiple rooms.
+
+**Mode 2 — Standalone counter (no door lines needed):** The polygon itself acts as the counting boundary. People are counted as ENTRY/EXIT based on when their reference point crosses the polygon boundary. No virtual door lines required.
+
+**How it works (Mode 2):**
+- The system tracks each person's position relative to the polygon across frames
+- When a person's reference point moves from **outside → inside** the polygon → **ENTRY**
+- When a person's reference point moves from **inside → outside** the polygon → **EXIT**
+- Shows all tracked people in the annotated video regardless of position
 
 **Calibration:**
 ```bash
@@ -93,6 +99,8 @@ python phase3_counter/counter_main.py --calibrate-region --calib-region-vid
 - 'q': Quit without saving
 - Spacebar: Play/pause video (video mode only)
 
+After saving the polygon, you'll be prompted to choose a **crossing point** (see Crossing Point Configuration section).
+
 **Configuration:**
 ```json
 {
@@ -106,6 +114,8 @@ python phase3_counter/counter_main.py --calibrate-region --calib-region-vid
   }
 }
 ```
+
+**To use as standalone counter:** Remove the `"lines"` array from the camera config (or set all lines to `[0,0]` coordinates) and define a room region polygon. The system will automatically detect this and use polygon-based counting.
 
 ### Execution Modes
 - Live Mode: Displays real-time OpenCV windows showing detections and counts.
@@ -186,7 +196,12 @@ After saving, the coordinates are written back to `counter_config.json` automati
 After all doors for a camera are calibrated, you'll be asked to choose a **crossing point** for that camera (see Crossing Point Configuration section for details).
 
 ### Step 5: (Optional) Calibrate room region polygon
-If your camera sees multiple rooms and you want to only count people inside a specific room:
+Two use cases:
+
+**A) As a filter with door lines** — Only count people inside a specific room when the camera sees multiple rooms.
+
+**B) As a standalone counter** — No door lines needed. The polygon itself becomes the counting boundary. People are counted as ENTRY when they enter the polygon and EXIT when they leave.
+
 ```bash
 # Draw polygon defining the room interior
 python phase3_counter/counter_main.py --calibrate-region
