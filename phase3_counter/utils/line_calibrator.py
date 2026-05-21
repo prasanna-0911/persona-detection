@@ -63,13 +63,14 @@ def _cross_sign(point: Tuple[int, int],
 
 def _draw_instructions(canvas: np.ndarray, lines: List[str],
                        y_start: int = 50, color=(255, 255, 0)) -> None:
-    """Overlay instruction text on the canvas.
-
-    NOTE: y_start=50 (not 20) so text appears BELOW the 30px header banner.
-    """
+    """Overlay instruction text on the canvas."""
+    h, w = canvas.shape[:2]
+    text_h = len(lines) * 30 + 20
+    x2 = min(420, w - 10)
+    overlay = canvas.copy()
+    cv2.rectangle(overlay, (0, 0), (x2, text_h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.55, canvas, 0.45, 0, canvas)
     for i, line in enumerate(lines):
-        cv2.putText(canvas, line, (10, y_start + i * 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0), 4)   # shadow
         cv2.putText(canvas, line, (10, y_start + i * 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
 
@@ -80,10 +81,9 @@ def _draw_state(canvas: np.ndarray, state: Dict,
     display = canvas.copy()
     h, w = display.shape[:2]
 
-    # Header banner
-    cv2.rectangle(display, (0, 0), (w, 30), (30, 30, 30), -1)
-    cv2.putText(display, f"CALIBRATION  |  Camera: {cam_name}  |  Door: {door_name}",
-                (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 1)
+    # Camera/door label at top-left (small, no background bar)
+    cv2.putText(display, f"{cam_name} | {door_name}", (8, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.60, (255, 255, 255), 1)
 
     step = state['step']
     pt1  = state['pt1']
@@ -91,33 +91,28 @@ def _draw_state(canvas: np.ndarray, state: Dict,
 
     if step == 'pt1':
         _draw_instructions(display, [
-            "Step 1 / 3 — LEFT-CLICK on one end of the door line.",
-            "              (place the point at the door frame edge)",
+            "Step 1 / 3 — LEFT-CLICK on one end of the door line",
             "  [SPACE] pause/play   [r] reset   [q] quit",
         ])
 
     elif step == 'pt2':
-        # Draw first point
         cv2.circle(display, pt1, 7, (0, 255, 255), -1)
         cv2.putText(display, "P1", (pt1[0] + 10, pt1[1] - 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
         _draw_instructions(display, [
-            "Step 2 / 3 — LEFT-CLICK on the OTHER end of the door line.",
+            "Step 2 / 3 — LEFT-CLICK on the OTHER end of the door line",
             "  [r] reset   [q] quit",
         ])
 
     elif step == 'inside':
-        # Draw completed line + both endpoints
         cv2.line(display, pt1, pt2, (0, 255, 255), 2)
         cv2.circle(display, pt1, 7, (0, 255, 255), -1)
         cv2.circle(display, pt2, 7, (0, 255, 255), -1)
-        # Midpoint label
         mid = ((pt1[0] + pt2[0]) // 2, (pt1[1] + pt2[1]) // 2)
         cv2.putText(display, door_name, (mid[0] + 5, mid[1] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         _draw_instructions(display, [
-            "Step 3 / 3 — LEFT-CLICK anywhere on the INSIDE of the room.",
-            "              (the side where people will be AFTER entering)",
+            "Step 3 / 3 — LEFT-CLICK on the INSIDE of the room",
             "  [r] reset   [q] quit",
         ], color=(0, 255, 100))
 
@@ -127,20 +122,17 @@ def _draw_state(canvas: np.ndarray, state: Dict,
         cv2.circle(display, pt1, 7, (0, 200, 0), -1)
         cv2.circle(display, pt2, 7, (0, 200, 0), -1)
         cv2.circle(display, inside_pt, 10, (255, 100, 0), -1)
-
-        # Green arrow hinting the ENTRY direction at the midpoint
         mid = ((pt1[0] + pt2[0]) // 2, (pt1[1] + pt2[1]) // 2)
         cv2.putText(display, door_name, (mid[0] + 5, mid[1] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 0), 2)
         cv2.circle(display, inside_pt, 10, (0, 100, 255), 2)
         cv2.putText(display, "INSIDE", (inside_pt[0] + 12, inside_pt[1] + 5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 100, 255), 2)
-
         _draw_instructions(display, [
-            "✅  Line saved!  Press [s] to continue to next door / camera.",
-            "                Press [r] to redo this line.",
-            "                Press [q] to quit.",
+            "Line saved!  Press [s] to continue  [r] redo  [q] quit",
         ], color=(0, 255, 100))
+
+    return display
 
     return display
 
@@ -206,8 +198,9 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
 
             print(f"\n   🚪  Defining line for: {door_name} ({door_id})")
 
-            window_name = f"Calibrate — {cam_name} — {door_name}"
-            cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
+            window_name = f"Calibrate — {cam_name}"
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(window_name, new_w, new_h)
 
             # Dynamically get the Windows screen size to fit-to-screen perfectly
             try:

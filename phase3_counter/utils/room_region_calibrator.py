@@ -130,7 +130,8 @@ class RoomRegionCalibrator:
 
         # Create window
         window_name = f"Room Region - {cam_name}"
-        cv2.namedWindow(window_name)
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, display_w, display_h)
 
         # Try to fit window to screen
         screen_w = 1280
@@ -193,7 +194,9 @@ class RoomRegionCalibrator:
                 for i in range(len(points) - 1):
                     cv2.line(display, points[i], points[i+1], (0, 255, 255), 2)
 
-            cv2.rectangle(display, (5, 5), (350, 110), (0, 0, 0), -1)
+            overlay_bg = display.copy()
+            cv2.rectangle(overlay_bg, (5, 5), (350, 110), (0, 0, 0), -1)
+            cv2.addWeighted(overlay_bg, 0.5, display, 0.5, 0, display)
             cv2.putText(display, f"Room: {cam_name}", (10, 25),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
             cv2.putText(display, f"Points: {len(points)}", (10, 50),
