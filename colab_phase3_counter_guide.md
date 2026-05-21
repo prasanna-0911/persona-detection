@@ -110,6 +110,8 @@ config = {
         {
             "name": "Test_Camera",
             "source": "phase3_counter/test_footage/video1.mp4",  # Your test video
+            "crossing_mode": "line",   # line, region, or both (see below)
+            "crossing_point": "foot",  # foot, center, top, or mid-foot
             "lines": [
                 {
                     "door_id": "Door_A",
@@ -130,6 +132,23 @@ with open('phase3_counter/config/counter_config.json', 'w') as f:
 
 print("Config saved!")
 ```
+
+### Crossing Mode Selector
+
+| `crossing_mode` | Behavior |
+|----------------|----------|
+| `"line"` (default) | Only count people crossing the virtual door lines |
+| `"region"` | Only count people crossing the polygon boundary (no lines needed) |
+| `"both"` | Both line and region count independently. Duplicate events from same track in same frame are removed. |
+
+### Crossing Point Selector
+
+| `crossing_point` | Point Used | Best For |
+|-----------------|-----------|----------|
+| `"foot"` (default) | Bottom of bounding box `(cx, y2)` | Eye-level cameras |
+| `"center"` | Center of bounding box `(cx, cy)` | High-angle corner cameras, occlusion |
+| `"top"` | Top of bounding box `(cx, y1)` | Overhead cameras |
+| `"mid-foot"` | Midpoint between center and foot `(cx, (cy+y2)//2)` | Balanced angles |
 
 ---
 
@@ -178,6 +197,12 @@ with open('phase3_counter/config/counter_config.json', 'r') as f:
 config['cameras'][0]['lines'][0]['start'] = [320, 200]   # Replace with your values
 config['cameras'][0]['lines'][0]['end'] = [320, 700]     # Replace with your values
 config['cameras'][0]['lines'][0]['inside_sign'] = 1      # 1 or -1
+
+# Set crossing point (foot/center/top/mid-foot)
+config['cameras'][0]['crossing_point'] = 'center'
+
+# Set crossing mode (line/region/both)
+config['cameras'][0]['crossing_mode'] = 'line'
 
 # Save updated config
 with open('phase3_counter/config/counter_config.json', 'w') as f:
@@ -279,7 +304,10 @@ print("Results saved to Google Drive!")
 
 ## Step 9: Add Room Region (Polygon)
 
-For multi-room cameras, add room polygon coordinates:
+Room region can be used in three ways depending on your `crossing_mode`:
+
+### Mode A: Event Filter (with `crossing_mode: "line"`)
+Only count door-line events where the person ends up inside the polygon.
 
 ```python
 import json
@@ -296,11 +324,67 @@ config['cameras'][0]['room_region'] = {
         [50, 600]       # Bottom-left
     ]
 }
+config['cameras'][0]['crossing_mode'] = 'line'
 
 with open('phase3_counter/config/counter_config.json', 'w') as f:
     json.dump(config, f, indent=2)
 
-print("Room region added!")
+print("Room region added as event filter!")
+```
+
+### Mode B: Standalone Counter (with `crossing_mode: "region"`)
+No door lines needed. The polygon boundary itself generates ENTRY/EXIT events when people cross it. Remove the `lines` array entirely:
+
+```python
+import json
+
+with open('phase3_counter/config/counter_config.json', 'r') as f:
+    config = json.load(f)
+
+# Remove door lines (no longer needed)
+del config['cameras'][0]['lines']
+
+# Define polygon as the counting boundary
+config['cameras'][0]['room_region'] = {
+    "polygon": [
+        [50, 100],      # Top-left
+        [800, 100],     # Top-right
+        [800, 600],     # Bottom-right
+        [50, 600]       # Bottom-left
+    ]
+}
+config['cameras'][0]['crossing_mode'] = 'region'
+config['cameras'][0]['crossing_point'] = 'center'
+
+with open('phase3_counter/config/counter_config.json', 'w') as f:
+    json.dump(config, f, indent=2)
+
+print("Room region set as standalone counter!")
+```
+
+### Mode C: Both (with `crossing_mode: "both"`)
+Both door lines AND polygon boundary generate events independently. Duplicate events from the same track on the same frame are removed automatically.
+
+```python
+import json
+
+with open('phase3_counter/config/counter_config.json', 'r') as f:
+    config = json.load(f)
+
+config['cameras'][0]['room_region'] = {
+    "polygon": [
+        [50, 100],
+        [800, 100],
+        [800, 600],
+        [50, 600]
+    ]
+}
+config['cameras'][0]['crossing_mode'] = 'both'
+
+with open('phase3_counter/config/counter_config.json', 'w') as f:
+    json.dump(config, f, indent=2)
+
+print("Room region added, crossing_mode set to both!")
 ```
 
 ---
@@ -339,11 +423,12 @@ print(os.path.exists('phase3_counter/test_footage/video1.mp4'))
 
 ---
 
-## Quick Test Template
+## Quick Test Templates
+
+### Template A: Door Line Mode (default)
 
 ```python
-# === COMPLETE QUICK TEST ===
-# Run this cell to quickly test the counter
+# === QUICK TEST — DOOR LINE MODE ===
 
 # 1. Setup
 from google.colab import drive
@@ -353,7 +438,7 @@ drive.mount('/content/drive')
 # 2. Navigate to project
 %cd /content/workspace/persona-detection-main
 
-# 3. Create test config
+# 3. Create config with door lines
 import json
 config = {
     "room_name": "Test",
@@ -368,6 +453,8 @@ config = {
     "cameras": [{
         "name": "Test",
         "source": "YOUR_VIDEO_PATH.mp4",
+        "crossing_mode": "line",
+        "crossing_point": "foot",
         "lines": [{
             "door_id": "D1",
             "door_name": "Door",
@@ -377,6 +464,113 @@ config = {
             "band_width": 25,
             "direction": "both"
         }]
+    }]
+}
+
+with open('phase3_counter/config/counter_config.json', 'w') as f:
+    json.dump(config, f, indent=2)
+
+# 4. Run test
+!python phase3_counter/counter_main.py --max-frames 200 --no-display
+
+# 5. Check logs
+import glob
+print("Logs:", glob.glob('phase3_counter/logs/*.csv'))
+```
+
+### Template B: Standalone Region Mode (no door lines)
+
+```python
+# === QUICK TEST — STANDALONE REGION MODE ===
+# Use this when you don't need door lines.
+# The polygon boundary itself counts ENTRY/EXIT.
+
+# 1. Setup
+from google.colab import drive
+drive.mount('/content/drive')
+!pip install ultralytics opencv-python numpy tqdm
+
+# 2. Navigate to project
+%cd /content/workspace/persona-detection-main
+
+# 3. Create config with region only (no lines)
+import json
+config = {
+    "room_name": "Test",
+    "yolo_model": "yolov8m.pt",
+    "conf": 0.45,
+    "imgsz": 640,
+    "device": "cuda",
+    "display": False,
+    "save_output": True,
+    "output_dir": "phase3_counter/outputs",
+    "logging": {"log_dir": "phase3_counter/logs", "flush_every": 10},
+    "cameras": [{
+        "name": "Test",
+        "source": "YOUR_VIDEO_PATH.mp4",
+        "crossing_mode": "region",
+        "crossing_point": "center",
+        "room_region": {
+            "polygon": [[50, 100], [800, 100], [800, 600], [50, 600]]
+        }
+    }]
+}
+
+with open('phase3_counter/config/counter_config.json', 'w') as f:
+    json.dump(config, f, indent=2)
+
+# 4. Run test
+!python phase3_counter/counter_main.py --max-frames 200 --no-display
+
+# 5. Check logs
+import glob
+print("Logs:", glob.glob('phase3_counter/logs/*.csv'))
+```
+
+### Template C: Both Mode (lines + region)
+
+```python
+# === QUICK TEST — BOTH MODE ===
+# Door lines AND region boundary both count independently.
+# Same track on same frame is counted once.
+
+# 1. Setup
+from google.colab import drive
+drive.mount('/content/drive')
+!pip install ultralytics opencv-python numpy tqdm
+
+# 2. Navigate to project
+%cd /content/workspace/persona-detection-main
+
+# 3. Create config with both lines and region
+import json
+config = {
+    "room_name": "Test",
+    "yolo_model": "yolov8m.pt",
+    "conf": 0.45,
+    "imgsz": 640,
+    "device": "cuda",
+    "display": False,
+    "save_output": True,
+    "output_dir": "phase3_counter/outputs",
+    "logging": {"log_dir": "phase3_counter/logs", "flush_every": 10},
+    "cameras": [{
+        "name": "Test",
+        "source": "YOUR_VIDEO_PATH.mp4",
+        "crossing_mode": "both",
+        "crossing_point": "center",
+        "lines": [{
+            "door_id": "D1",
+            "door_name": "Door",
+            "start": [X1, Y1],
+            "end": [X2, Y2],
+            "inside_sign": 1,
+            "band_width": 25,
+            "direction": "both"
+        }],
+        "room_region": {
+            "polygon": [[50, 100], [800, 100], [800, 600], [50, 600]]
+        }
     }]
 }
 
