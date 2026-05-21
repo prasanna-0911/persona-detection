@@ -22,18 +22,44 @@
           "door_id": "Door_A",
           "door_name": "Main Entrance",
           "start": [
-            62,
-            669
+            68,
+            623
           ],
           "end": [
-            1170,
-            1093
+            577,
+            1015
           ],
           "_calibration_note": "These coordinates are placeholders. Run: python phase3_counter/counter_main.py --calibrate",
           "inside_sign": -1,
-          "band_width": 25
+          "band_width": 25,
+          "_direction_note": "Direction: 'both' (default) counts both entry/exit. 'entry' = only forward entries. 'exit' = only forward exits.",
+          "direction": "both"
         }
-      ]
+      ],
+      "room_region": {
+        "polygon": [
+          [
+            73,
+            576
+          ],
+          [
+            283,
+            1068
+          ],
+          [
+            1209,
+            1065
+          ],
+          [
+            1669,
+            378
+          ],
+          [
+            1098,
+            141
+          ]
+        ]
+      }
     }
   ]
 }

@@ -6,7 +6,7 @@
   "yolo_model"  : "yolov8m.pt",
   "conf"        : 0.45,
   "imgsz"       : 960,
-  "device"      : "cuda",
+        : "cuda",
   "display"     : true,
   "save_output" : true,
   "output_dir"  : "phase3_counter/outputs",
@@ -18,9 +18,18 @@
 
   "cameras": [
     {
-      "_comment": "Example 1: Camera watching ONE door.",
+      "_comment": "Example 1: Camera watching ONE door (bidirectional — counts both entry and exit).",
       "name"  : "Camera_1",
       "source": "rtsp://admin:pass@192.168.1.100:554/Streaming/Channels/101",
+      "_room_region_note": "OPTIONAL: Define room interior polygon to only count people inside that area. Run: python phase3_counter/utils/room_region_calibrator.py --config ... to draw.",
+      "room_region": {
+        "polygon": [
+          [50, 100],
+          [800, 100],
+          [800, 600],
+          [50, 600]
+        ]
+      },
       "lines": [
         {
           "door_id"  : "Door_A",
@@ -30,14 +39,48 @@
           "_inside_sign_note": "+1 = left side of line is INSIDE room. -1 = right side is INSIDE room. Set by calibration tool.",
           "inside_sign": 1,
           "_band_width_note": "Crossing zone in pixels. Person must fully cross this band to register a count. Default 25.",
-          "band_width" : 25
+          "band_width" : 25,
+          "_direction_note": "Direction detection: 'both' = count both entry/exit (default). 'entry' = only count forward entries. 'exit' = only count forward exits.",
+          "direction" : "both"
         }
       ]
     },
     {
-      "_comment": "Example 2: One camera watching TWO doors (e.g. wide-angle camera).",
-      "name"  : "Camera_2",
+      "_comment": "Example 2: Two cameras — one for ENTRY only, one for EXIT only (dual camera setup).",
+      "name"  : "Entry_Camera",
+      "source": "rtsp://admin:pass@192.168.1.100:554/Streaming/Channels/101",
+      "lines": [
+        {
+          "door_id"  : "Door_Entry",
+          "door_name": "Main Entrance",
+          "start"    : [320, 200],
+          "end"      : [320, 700],
+          "inside_sign": 1,
+          "band_width" : 25,
+          "direction" : "entry"
+        }
+      ]
+    },
+    {
+      "_comment": "Example 2 (continued): Exit camera — only counts forward exits, ignores backward entries.",
+      "name"  : "Exit_Camera",
       "source": "rtsp://admin:pass@192.168.1.101:554/Streaming/Channels/101",
+      "lines": [
+        {
+          "door_id"  : "Door_Exit",
+          "door_name": "Emergency Exit",
+          "start"    : [400, 150],
+          "end"      : [400, 650],
+          "inside_sign": 1,
+          "band_width" : 25,
+          "direction" : "exit"
+        }
+      ]
+    },
+    {
+      "_comment": "Example 3: One camera watching TWO doors (e.g. wide-angle camera).",
+      "name"  : "Camera_2",
+      "source": "rtsp://admin:pass@192.168.1.102:554/Streaming/Channels/101",
       "lines": [
         {
           "door_id"  : "Door_B",
@@ -45,7 +88,8 @@
           "start"    : [150, 150],
           "end"      : [150, 600],
           "inside_sign": 1,
-          "band_width" : 25
+          "band_width" : 25,
+          "direction" : "both"
         },
         {
           "door_id"  : "Door_C",
@@ -53,12 +97,63 @@
           "start"    : [500, 150],
           "end"      : [500, 600],
           "inside_sign": -1,
-          "band_width" : 25
+          "band_width" : 25,
+          "direction" : "both"
         }
       ]
     },
     {
-      "_comment": "Example 3: Camera source is a local video file (for testing).",
+      "_comment": "Example 4: Same doorway with two doors — one entry, one exit (double door).",
+      "name"  : "Double_Door_Camera",
+      "source": "rtsp://admin:pass@192.168.1.103:554/Streaming/Channels/101",
+      "lines": [
+        {
+          "door_id"  : "Door_Left_Entry",
+          "door_name": "Left Door (Entry)",
+          "start"    : [200, 200],
+          "end"      : [200, 700],
+          "inside_sign": 1,
+          "band_width" : 25,
+          "direction" : "entry"
+        },
+        {
+          "door_id"  : "Door_Right_Exit",
+          "door_name": "Right Door (Exit)",
+          "start"    : [600, 200],
+          "end"      : [600, 700],
+          "inside_sign": -1,
+          "band_width" : 25,
+          "direction" : "exit"
+        }
+      ]
+    },
+    {
+      "_comment": "Example 5: Camera sees MULTIPLE ROOMS — define polygon to count only specific room.",
+      "name"  : "Multi_Room_Camera",
+      "source": "rtsp://admin:pass@192.168.1.104:554/Streaming/Channels/101",
+      "_room_region_note": "When camera sees multiple rooms, define polygon for the room to count.",
+      "room_region": {
+        "polygon": [
+          [400, 50],
+          [750, 50],
+          [750, 500],
+          [400, 500]
+        ]
+      },
+      "lines": [
+        {
+          "door_id"  : "Door_A",
+          "door_name": "Room A Main Door",
+          "start"    : [450, 100],
+          "end"      : [450, 450],
+          "inside_sign": 1,
+          "band_width" : 25,
+          "direction" : "both"
+        }
+      ]
+    },
+    {
+      "_comment": "Example 5: Camera source is a local video file (for testing).",
       "name"  : "Camera_3",
       "source": "phase3_counter/test_footage/door_test_3.mp4",
       "lines": [
@@ -68,7 +163,8 @@
           "start"    : [100, 300],
           "end"      : [900, 300],
           "inside_sign": -1,
-          "band_width" : 30
+          "band_width" : 30,
+          "direction" : "both"
         }
       ]
     }

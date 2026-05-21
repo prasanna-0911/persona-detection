@@ -43,6 +43,18 @@ sign corresponds to the room interior and saves it to config.
 
 ENTRY = foot moves TO the inside_sign side   (came from outside, now inside)
 EXIT  = foot moves AWAY from inside_sign side (came from inside, now outside)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIRECTION FILTERING (Optional)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+If direction parameter is set, events are filtered based on movement direction:
+  • "both" (default): Count both entry and exit (backward compatible)
+  • "entry": Only count forward movement INTO the room (ignore backward)
+  • "exit": Only count forward movement OUT OF the room (ignore backward)
+
+This requires velocity_dict to be passed to update() method, containing
+track_id -> (dx, dy) normalized velocity vectors.
 """
 
 import numpy as np
@@ -65,11 +77,18 @@ class DoorLineCrosser:
             inside_sign (int) : +1 or -1 — which cross-product sign = inside room.
                                 Set automatically by the calibration tool.
             band_width  (int) : Crossing zone width in pixels (default 25).
+            direction   (str) : "both" (default), "entry", or "exit".
+                               If "entry", only count forward entries.
+                               If "exit", only count forward exits.
     """
 
     def __init__(self, lines_config: List[Dict]):
         self._lines: List[Dict] = []
         for cfg in lines_config:
+            direction = cfg.get('direction', 'both')
+            if direction not in ('both', 'entry', 'exit'):
+                direction = 'both'
+
             self._lines.append({
                 'door_id'    : cfg['door_id'],
                 'door_name'  : cfg.get('door_name', cfg['door_id']),
@@ -77,6 +96,7 @@ class DoorLineCrosser:
                 'end'        : tuple(cfg['end']),
                 'inside_sign': int(cfg.get('inside_sign', 1)),
                 'band_width' : int(cfg.get('band_width', 25)),
+                'direction'  : direction,
             })
 
         # State per line: line_index → {track_id: last_known_side}
@@ -87,13 +107,17 @@ class DoorLineCrosser:
     # Public API
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    def update(self, tracks: List[Tuple[int, np.ndarray]]) -> List[Dict]:
+    def update(self, tracks: List[Tuple[int, np.ndarray]],
+               velocity_dict: Optional[Dict[int, Tuple[float, float]]] = None) -> List[Dict]:
         """
         Process one frame of tracking results and detect crossings.
 
         Args:
             tracks: List of (track_id, bbox) tuples.
                     bbox = numpy array [x1, y1, x2, y2] in pixel coords.
+            velocity_dict: Optional dict mapping track_id to (dx, dy) normalized
+                          velocity vectors. If provided, direction filtering
+                          will be applied based on each line's 'direction' setting.
 
         Returns:
             List of crossing event dicts. Each dict contains:
@@ -102,6 +126,7 @@ class DoorLineCrosser:
                 event     (str): "ENTRY" or "EXIT"
                 track_id  (int): BoT-SORT track ID that crossed
                 foot      (tuple): (x, y) foot position for debugging
+                filtered  (bool): True if event was filtered out due to direction
         """
         events: List[Dict] = []
 
@@ -109,6 +134,7 @@ class DoorLineCrosser:
             return events
 
         active_ids = {t[0] for t in tracks}
+        velocity_dict = velocity_dict or {}
 
         for line_idx, line in enumerate(self._lines):
             prev_sides = self._prev_sides[line_idx]
@@ -127,6 +153,16 @@ class DoorLineCrosser:
             end         = line['end']
             inside_sign = line['inside_sign']
             band_width  = line['band_width']
+            direction   = line.get('direction', 'both')
+
+            # Compute normalized line direction for movement comparison
+            line_dx = end[0] - start[0]
+            line_dy = end[1] - start[1]
+            line_mag = (line_dx * line_dx + line_dy * line_dy) ** 0.5
+            if line_mag > 0:
+                line_dir = (line_dx / line_mag, line_dy / line_mag)
+            else:
+                line_dir = (0.0, 0.0)
 
             for track_id, bbox in tracks:
                 x1, y1, x2, y2 = map(int, bbox)
@@ -157,13 +193,44 @@ class DoorLineCrosser:
                         # ══ CROSSING DETECTED ══
                         # Person was on one side, is now clearly on the other.
                         event_type = 'ENTRY' if sign == inside_sign else 'EXIT'
-                        events.append({
-                            'door_id'  : line['door_id'],
-                            'door_name': line['door_name'],
-                            'event'    : event_type,
-                            'track_id' : track_id,
-                            'foot'     : foot,
-                        })
+
+                        # ── Direction Filtering ──
+                        # If direction is "entry" or "exit", check movement direction
+                        filtered = False
+                        if direction != 'both' and track_id in velocity_dict:
+                            dx, dy = velocity_dict[track_id]
+
+                            # Determine if movement is forward or backward
+                            if dx != 0 or dy != 0:
+                                dot = dx * line_dir[0] + dy * line_dir[1]
+
+                                # Determine actual movement direction
+                                movement_is_forward = dot > 0.1
+                                movement_is_backward = dot < -0.1
+
+                                if direction == 'entry':
+                                    # Only count forward movement INTO room
+                                    if event_type == 'EXIT':
+                                        filtered = True
+                                    elif event_type == 'ENTRY' and not movement_is_forward:
+                                        filtered = True
+
+                                elif direction == 'exit':
+                                    # Only count forward movement OUT OF room
+                                    if event_type == 'ENTRY':
+                                        filtered = True
+                                    elif event_type == 'EXIT' and not movement_is_forward:
+                                        filtered = True
+
+                        # Only add event if not filtered
+                        if not filtered:
+                            events.append({
+                                'door_id'  : line['door_id'],
+                                'door_name': line['door_name'],
+                                'event'    : event_type,
+                                'track_id' : track_id,
+                                'foot'     : foot,
+                            })
 
                 # Update side record (only when clearly outside band)
                 prev_sides[track_id] = sign

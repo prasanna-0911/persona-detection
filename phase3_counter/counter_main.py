@@ -75,6 +75,8 @@ from multi_camera_tracker import VideoSource   # reused; file not modified
 from core.door_line_crosser    import DoorLineCrosser
 from core.occupancy_aggregator import RoomOccupancyAggregator
 from core.event_logger         import EventLogger
+from core.direction_tracker    import MovementDirectionTracker
+from core.room_region          import RoomRegion
 
 # ── Ultralytics YOLO ──────────────────────────────────────────────────────────
 from ultralytics import YOLO
@@ -92,9 +94,11 @@ def _annotate_frame(frame: np.ndarray,
                     crosser: DoorLineCrosser,
                     snapshot: Dict,
                     cam_name: str,
-                    recent_events: deque) -> np.ndarray:
+                    recent_events: deque,
+                    room_region: 'RoomRegion' = None) -> np.ndarray:
     """
     Draw all annotations on a copy of the frame:
+      • Room region polygon (green, semi-transparent)
       • Virtual door lines + band zone (yellow)
       • Person bounding boxes + track IDs (orange)
       • Foot-center dots (red)
@@ -109,12 +113,31 @@ def _annotate_frame(frame: np.ndarray,
         snapshot:      Occupancy snapshot dict from aggregator.
         cam_name:      Camera label for display.
         recent_events: deque of (event_dict, timestamp) pairs.
+        room_region:    Optional RoomRegion polygon to draw.
 
     Returns:
         Annotated BGR frame (frame is NOT modified in-place).
     """
     out = frame.copy()
     h, w = out.shape[:2]
+
+    # ── 0. Draw room region polygon (if defined) ───────────────────────────────
+    if room_region is not None and room_region.is_valid():
+        polygon = room_region.polygon
+        pts = np.array(polygon, dtype=np.int32)
+        pts = pts.reshape((-1, 1, 2))
+
+        # Draw filled polygon (semi-transparent)
+        overlay = out.copy()
+        cv2.fillPoly(overlay, [pts], (0, 255, 0))
+        cv2.addWeighted(overlay, 0.15, out, 0.85, 0, out)
+
+        # Draw polygon outline
+        cv2.polylines(out, [pts], True, (0, 255, 0), 2)
+
+        # Draw "Room Region" label at first point
+        cv2.putText(out, "ROOM", (polygon[0][0], polygon[0][1] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
     # ── 1. Draw virtual lines + band zones ────────────────────────────────────
     for line_cfg in crosser.get_line_configs():
@@ -258,6 +281,30 @@ def _camera_worker(cam_cfg: Dict,
         print(f"    Skipping {cam_name}.\n")
         return
 
+    # ── Initialize room region (for multi-room camera support) ───────────────────
+    room_region_cfg = cam_cfg.get('room_region', {})
+    room_region = None
+
+    if room_region_cfg and room_region_cfg.get('polygon'):
+        try:
+            polygon = [tuple(p) for p in room_region_cfg['polygon']]
+            if len(polygon) >= 3:
+                room_region = RoomRegion(polygon)
+                print(f"   [{cam_name}] Room region: {len(polygon)}-point polygon")
+        except Exception as e:
+            print(f"   [{cam_name}] ⚠️ Room region invalid: {e}")
+
+    # ── Initialize direction tracker for movement detection ─────────────────────
+    direction_tracker = MovementDirectionTracker()
+
+    # Check if any line uses direction filtering
+    has_direction_filter = any(
+        line.get('direction') in ('entry', 'exit')
+        for line in lines_cfg
+    )
+    if has_direction_filter:
+        print(f"   [{cam_name}] Direction filtering enabled for some doors")
+
     # ── Open video source ──────────────────────────────────────────────────────
     vs = VideoSource(source)
     if not vs.open():
@@ -374,8 +421,20 @@ def _camera_worker(cam_cfg: Dict,
                 ids   = results[0].boxes.id.int().cpu().tolist()
                 tracks = list(zip(ids, boxes))
 
+            # ── Filter tracks by room region (if defined) ─────────────────────
+            # This ensures we only count people inside the specified room polygon
+            if room_region is not None:
+                original_count = len(tracks)
+                tracks = room_region.filter_tracks(tracks)
+                # Debug info can be added here if needed
+
+            # ── Compute movement direction for direction filtering ─────────────
+            velocity_dict = {}
+            if has_direction_filter:
+                velocity_dict = direction_tracker.update(tracks)
+
             # ── Check line crossings ───────────────────────────────────────
-            events = crosser.update(tracks)
+            events = crosser.update(tracks, velocity_dict=velocity_dict)
 
             # ── Process events ─────────────────────────────────────────────
             now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
@@ -400,7 +459,8 @@ def _camera_worker(cam_cfg: Dict,
             # ── Annotate + display ─────────────────────────────────────────
             snap      = aggregator.get_snapshot()
             annotated = _annotate_frame(
-                frame, tracks, crosser, snap, cam_name, recent_events
+                frame, tracks, crosser, snap, cam_name, recent_events,
+                room_region=room_region
             )
 
             if display:
@@ -461,6 +521,10 @@ def _build_parser() -> argparse.ArgumentParser:
                    help='Run the interactive line calibration tool and exit.')
     p.add_argument('--calib-vid', action='store_true',
                    help='Play the video feed during calibration instead of a static frame.')
+    p.add_argument('--calibrate-region', action='store_true',
+                   help='Run the room region polygon calibration tool and exit.')
+    p.add_argument('--calib-region-vid', action='store_true',
+                   help='Play the video feed during room region calibration.')
     p.add_argument('--initial-count', type=int, default=0,
                    help='Seed occupancy with N people already in the room '
                         '(useful when starting mid-day).  Default: 0')
@@ -496,6 +560,13 @@ def main():
         print("\n🔧 Starting line calibration tool...")
         from utils.line_calibrator import run_calibration
         run_calibration(cfg_path, play_video=args.calib_vid)
+        return
+
+    # ── Room Region calibration mode ───────────────────────────────────────────
+    if args.calibrate_region:
+        print("\n🗺️ Starting room region calibration tool...")
+        from utils.room_region_calibrator import run_calibration as run_region_calibration
+        run_region_calibration(cfg_path, play_video=args.calib_region_vid)
         return
 
     # ── Banner ─────────────────────────────────────────────────────────────────
