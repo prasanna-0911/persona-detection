@@ -439,28 +439,41 @@ def _camera_worker(cam_cfg: Dict,
                 velocity_dict = direction_tracker.update(tracks)
 
             # ── Detect entry/exit events ──────────────────────────────────
+            crossing_mode = cam_cfg.get('crossing_mode', 'line')
             lines_calibrated = crosser.is_calibrated()
             has_region = room_region is not None and room_region.is_valid()
 
-            if lines_calibrated:
-                # Use door-line crossing detection
-                events = crosser.update(tracks, velocity_dict=velocity_dict)
+            line_events = []
+            region_events = []
 
-                # Filter events by room region (if defined)
+            # Door line crossing events
+            if lines_calibrated and crossing_mode in ('line', 'both'):
+                line_events = crosser.update(tracks, velocity_dict=velocity_dict)
                 if has_region:
-                    events = [
-                        ev for ev in events
+                    line_events = [
+                        ev for ev in line_events
                         if (ev['event'] == 'ENTRY' and
                             room_region.is_point_inside(ev['foot'][0], ev['foot'][1])) or
                            (ev['event'] == 'EXIT' and
                             not room_region.is_point_inside(ev['foot'][0], ev['foot'][1]))
                     ]
-            elif has_region:
-                # Standalone polygon-based counting (no door lines)
+
+            # Polygon boundary crossing events
+            if has_region and crossing_mode in ('region', 'both'):
                 cp = cam_cfg.get('crossing_point', 'foot')
-                events = room_region.update_events(tracks, crossing_point=cp)
+                region_events = room_region.update_events(tracks, crossing_point=cp)
+
+            if crossing_mode == 'both':
+                # Merge both sources
+                line_ids = {(e['track_id'], e['event']) for e in line_events}
+                region_ids = {(e['track_id'], e['event']) for e in region_events}
+                # Keep unique events from each source (same track won't double-count)
+                events = line_events + [
+                    e for e in region_events
+                    if (e['track_id'], e['event']) not in line_ids
+                ]
             else:
-                events = []
+                events = line_events if crossing_mode == 'line' else region_events
 
             # ── Process events ─────────────────────────────────────────────
             now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]

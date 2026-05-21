@@ -66,6 +66,7 @@ class RoomRegionCalibrator:
         self.current_scale = 1.0
         self.polygons: Dict[str, List[Tuple[int, int]]] = {}
         self._crossing_points: Dict[str, str] = {}
+        self._crossing_modes: Dict[str, str] = {}
         self.drawing = True
 
         # Load existing polygons from config
@@ -263,6 +264,34 @@ class RoomRegionCalibrator:
                     print("\n   ⚠️  Defaulting to: foot")
                     break
 
+        # ── Prompt for crossing mode ────────────────────────────────────
+        if len(points) >= 3:
+            valid_modes = {'line', 'region', 'both'}
+            lines_cfg = self.config.get('cameras', [])[self.current_cam_idx].get('lines', [])
+            has_active_lines = any(
+                l.get('start') != [0, 0] or l.get('end') != [0, 0]
+                for l in lines_cfg
+            ) if lines_cfg else False
+            default_mode = 'line' if has_active_lines else 'region'
+            mode_prompt = (f"\n   🎯  Crossing mode for {cam_name}"
+                           f" (line/region/both) [{default_mode}]: ")
+            while True:
+                try:
+                    cm_input = input(mode_prompt).strip().lower()
+                    if not cm_input:
+                        cm_input = default_mode
+                    if cm_input in valid_modes:
+                        self._crossing_modes[cam_name] = cm_input
+                        print(f"   ✅  Crossing mode set to: {cm_input}")
+                        break
+                    else:
+                        print(f"   ⚠️  Invalid option '{cm_input}'. "
+                              f"Choose from: line, region, both")
+                except (EOFError, KeyboardInterrupt):
+                    self._crossing_modes[cam_name] = default_mode
+                    print(f"\n   ⚠️  Defaulting to: {default_mode}")
+                    break
+
     def _add_point(self, cam_name: str, point: Tuple[int, int]):
         """Add a point to the polygon."""
         points = self.polygons[cam_name]
@@ -286,6 +315,10 @@ class RoomRegionCalibrator:
             # Save crossing point if set
             if cam_name in self._crossing_points:
                 cam['crossing_point'] = self._crossing_points[cam_name]
+
+            # Save crossing mode if set
+            if cam_name in self._crossing_modes:
+                cam['crossing_mode'] = self._crossing_modes[cam_name]
 
         # Save to file
         with open(self.config_path, 'w', encoding='utf-8') as f:

@@ -571,6 +571,69 @@ If neither is set, `"foot"` is used as the final default.
 
 ---
 
+## Crossing Mode Configuration
+
+Controls which detection source is used for counting entry/exit events.
+
+### Options
+
+| Mode | Behavior |
+|------|----------|
+| `"line"` (default) | Only door line crossings are counted. The room region polygon acts as a filter. |
+| `"region"` | Only polygon boundary crossings are counted. No door lines needed. |
+| `"both"` | Both line and region events count independently. Duplicate events (same track on same frame) are deduplicated. |
+
+### When to Use Each Mode
+
+**`"line"`:** Standard setup. You have door lines calibrated and want precise line-crossing logic with band zone filtering.
+
+**`"region"`:** Use when you don't need door lines. The polygon boundary itself becomes the counting boundary. Good for open spaces, wide entrances, or when door lines are impractical.
+
+**`"both"`:** Use both as independent checks. A person entering will be counted once (deduplication prevents double-counting). Useful for redundancy or testing.
+
+### How It's Set
+
+During calibration (`--calibrate` or `--calibrate-region`), after the crossing point prompt, you'll be asked:
+
+```
+🎯  Crossing mode for Camera_1 (line/region/both) [line]:
+```
+
+Press Enter to accept the suggested default (line if lines exist, region otherwise), or type your choice.
+
+### Config Structure
+
+Set per camera in `counter_config.json`:
+
+```json
+{
+  "cameras": [
+    {
+      "name": "Camera_1",
+      "crossing_mode": "both",
+      "crossing_point": "center",
+      "lines": [
+        {
+          "door_id": "Door_A",
+          "door_name": "Main Entrance",
+          "start": [320, 200],
+          "end": [320, 700],
+          "inside_sign": 1,
+          "band_width": 25
+        }
+      ],
+      "room_region": {
+        "polygon": [[50, 100], [800, 100], [800, 600], [50, 600]]
+      }
+    }
+  ]
+}
+```
+
+If not set, defaults to `"line"`.
+
+---
+
 ## Direction Detection Behavior
 
 | Direction Setting | Forward Movement Into Room | Backward Movement | Forward Movement Out of Room |

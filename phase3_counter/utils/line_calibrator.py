@@ -345,6 +345,33 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
                 print("\n   ⚠️  Defaulting to: foot")
                 break
 
+        # ── Prompt for crossing mode (once per camera) ──────────────────
+        valid_modes = {'line', 'region', 'both'}
+        current_lines = cam_cfg.get('lines', [])
+        has_active_lines = any(
+            l.get('start') != [0, 0] or l.get('end') != [0, 0]
+            for l in current_lines
+        )
+        default_mode = 'line' if has_active_lines else 'region'
+        mode_prompt = (f"\n   🎯  Crossing mode for {cam_name}"
+                       f" (line/region/both) [{default_mode}]: ")
+        while True:
+            try:
+                cm_input = input(mode_prompt).strip().lower()
+                if not cm_input:
+                    cm_input = default_mode
+                if cm_input in valid_modes:
+                    cam_cfg['crossing_mode'] = cm_input
+                    print(f"   ✅  Crossing mode set to: {cm_input}")
+                    break
+                else:
+                    print(f"   ⚠️  Invalid option '{cm_input}'. "
+                          f"Choose from: line, region, both")
+            except (EOFError, KeyboardInterrupt):
+                cam_cfg['crossing_mode'] = default_mode
+                print(f"\n   ⚠️  Defaulting to: {default_mode}")
+                break
+
         if play_video:
             vs.release()
 
