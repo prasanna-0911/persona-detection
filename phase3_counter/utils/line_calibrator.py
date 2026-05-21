@@ -324,7 +324,28 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
                 if play_video: vs.release()
                 return False
 
-        if play_video: 
+        # ── Prompt for crossing point (once per camera) ─────────────────
+        valid_options = {'foot', 'center', 'top', 'mid-foot'}
+        prompt = (f"\n   🎯  Crossing point for {cam_name}"
+                  f" (foot/center/top/mid-foot) [foot]: ")
+        while True:
+            try:
+                cp_input = input(prompt).strip().lower()
+                if not cp_input:
+                    cp_input = 'foot'
+                if cp_input in valid_options:
+                    cam_cfg['crossing_point'] = cp_input
+                    print(f"   ✅  Crossing point set to: {cp_input}")
+                    break
+                else:
+                    print(f"   ⚠️  Invalid option '{cp_input}'. "
+                          f"Choose from: foot, center, top, mid-foot")
+            except (EOFError, KeyboardInterrupt):
+                cam_cfg['crossing_point'] = 'foot'
+                print("\n   ⚠️  Defaulting to: foot")
+                break
+
+        if play_video:
             vs.release()
 
     # ── Write updated config ──────────────────────────────────────────────────

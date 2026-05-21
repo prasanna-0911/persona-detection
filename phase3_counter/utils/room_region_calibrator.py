@@ -65,6 +65,7 @@ class RoomRegionCalibrator:
         self.current_cam_name = ''
         self.current_scale = 1.0
         self.polygons: Dict[str, List[Tuple[int, int]]] = {}
+        self._crossing_points: Dict[str, str] = {}
         self.drawing = True
 
         # Load existing polygons from config
@@ -240,6 +241,28 @@ class RoomRegionCalibrator:
         # Store points
         self.polygons[cam_name] = points
 
+        # ── Prompt for crossing point ────────────────────────────────────
+        if len(points) >= 3:
+            valid_options = {'foot', 'center', 'top', 'mid-foot'}
+            prompt_text = (f"\n   🎯  Crossing point for {cam_name}"
+                          f" (foot/center/top/mid-foot) [foot]: ")
+            while True:
+                try:
+                    cp_input = input(prompt_text).strip().lower()
+                    if not cp_input:
+                        cp_input = 'foot'
+                    if cp_input in valid_options:
+                        self._crossing_points[cam_name] = cp_input
+                        print(f"   ✅  Crossing point set to: {cp_input}")
+                        break
+                    else:
+                        print(f"   ⚠️  Invalid option '{cp_input}'. "
+                             f"Choose from: foot, center, top, mid-foot")
+                except (EOFError, KeyboardInterrupt):
+                    self._crossing_points[cam_name] = 'foot'
+                    print("\n   ⚠️  Defaulting to: foot")
+                    break
+
     def _add_point(self, cam_name: str, point: Tuple[int, int]):
         """Add a point to the polygon."""
         points = self.polygons[cam_name]
@@ -247,7 +270,7 @@ class RoomRegionCalibrator:
         print(f"   + Point ({point[0]}, {point[1]}) - Total: {len(points)}")
 
     def _save_config(self):
-        """Save polygons to config file."""
+        """Save polygons and crossing points to config file."""
         # Update config
         for cam in self.cameras:
             cam_name = cam.get('name', 'Camera')
@@ -259,6 +282,10 @@ class RoomRegionCalibrator:
                 }
             elif 'room_region' in cam:
                 del cam['room_region']
+
+            # Save crossing point if set
+            if cam_name in self._crossing_points:
+                cam['crossing_point'] = self._crossing_points[cam_name]
 
         # Save to file
         with open(self.config_path, 'w', encoding='utf-8') as f:

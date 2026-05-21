@@ -183,6 +183,8 @@ python phase3_counter/counter_main.py --calibrate --calib-vid
 
 After saving, the coordinates are written back to `counter_config.json` automatically.
 
+After all doors for a camera are calibrated, you'll be asked to choose a **crossing point** for that camera (see Crossing Point Configuration section for details).
+
 ### Step 5: (Optional) Calibrate room region polygon
 If your camera sees multiple rooms and you want to only count people inside a specific room:
 ```bash
@@ -464,6 +466,93 @@ Use when one camera watches a double door where left is entry and right is exit.
   ]
 }
 ```
+
+---
+
+## Crossing Point Configuration
+
+The system determines a person's position on the frame using a reference point from their bounding box. You can choose which point to use per camera or per door.
+
+### Options
+
+| Setting | Point Used | Best For |
+|---------|-----------|----------|
+| `"foot"` (default) | Bottom-center `(cx, y2)` | Standard doorways, camera at eye level |
+| `"center"` | Center `(cx, cy)` | High-angle cameras, occlusion-prone areas |
+| `"top"` | Top-center `(cx, y1)` | Overhead/drone cameras |
+| `"mid-foot"` | Midpoint between center and foot | Balanced approach |
+
+```text
+        ┌──────────┐
+        │ top      │  (cx, y1)
+        │          │
+        │ center   │  (cx, cy)
+        │          │
+        │ mid-foot │  (cx, (cy+y2)//2)
+        │          │
+        │ foot     │  (cx, y2)
+        └──────────┘
+```
+
+### When to Use Each Option
+
+**`foot` (default):** Use when the camera is at eye level and the door line is on the ground. The foot (bottom of bounding box) gives the most accurate ground position.
+
+**`center`:** Use when the camera is mounted on a corner wall near the entrance. In this setup, people walking through the door often occlude each other, and the occluded person's bounding box bottom jumps up. The center point stays on the visible torso and is more stable.
+
+**`top`:** Use for overhead cameras pointing straight down. The top of the bounding box corresponds to the head/center of the person.
+
+**`mid-foot`:** A compromise between center and foot. Use when foot-based detection is slightly too low and center is slightly too high for your camera angle.
+
+### How It's Set
+
+During calibration (`--calibrate` or `--calibrate-region`), after finishing all doors for a camera, you'll be prompted:
+
+```
+🎯  Crossing point for Camera_1 (foot/center/top/mid-foot) [foot]:
+```
+
+Press Enter to accept the default (`foot`), or type your choice.
+
+### Config Inheritance
+
+The crossing point can be set at **two levels**:
+
+1. **Camera level** — applies to all doors in that camera:
+    ```json
+    {
+      "cameras": [
+        {
+          "name": "Camera_1",
+          "crossing_point": "center",
+          "lines": [...]
+        }
+      ]
+    }
+    ```
+
+2. **Per-door level** — overrides the camera setting for a specific door:
+    ```json
+    {
+      "lines": [
+        {
+          "door_id": "Door_A",
+          "door_name": "Main Entrance",
+          "crossing_point": "foot",
+          "start": [...],
+          "end": [...]
+        },
+        {
+          "door_id": "Door_B",
+          "door_name": "Side Door",
+          "crossing_point": "mid-foot",
+          ...
+        }
+      ]
+    }
+    ```
+
+If neither is set, `"foot"` is used as the final default.
 
 ---
 

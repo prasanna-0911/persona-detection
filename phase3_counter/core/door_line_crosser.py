@@ -89,14 +89,19 @@ class DoorLineCrosser:
             if direction not in ('both', 'entry', 'exit'):
                 direction = 'both'
 
+            crossing_point = cfg.get('crossing_point', 'foot')
+            if crossing_point not in ('foot', 'center', 'top', 'mid-foot'):
+                crossing_point = 'foot'
+
             self._lines.append({
-                'door_id'    : cfg['door_id'],
-                'door_name'  : cfg.get('door_name', cfg['door_id']),
-                'start'      : tuple(cfg['start']),
-                'end'        : tuple(cfg['end']),
-                'inside_sign': int(cfg.get('inside_sign', 1)),
-                'band_width' : int(cfg.get('band_width', 25)),
-                'direction'  : direction,
+                'door_id'       : cfg['door_id'],
+                'door_name'     : cfg.get('door_name', cfg['door_id']),
+                'start'         : tuple(cfg['start']),
+                'end'           : tuple(cfg['end']),
+                'inside_sign'   : int(cfg.get('inside_sign', 1)),
+                'band_width'    : int(cfg.get('band_width', 25)),
+                'direction'     : direction,
+                'crossing_point': crossing_point,
             })
 
         # State per line: line_index → {track_id: last_known_side}
@@ -166,10 +171,20 @@ class DoorLineCrosser:
 
             for track_id, bbox in tracks:
                 x1, y1, x2, y2 = map(int, bbox)
+                cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
 
-                # Use BOTTOM-CENTER as the foot position.
-                # More stable than centroid and represents physical ground position.
-                foot = ((x1 + x2) // 2, y2)
+                # Use crossing point based on config
+                cp_type = line.get('crossing_point', 'foot')
+                if cp_type == 'foot':
+                    foot = (cx, y2)
+                elif cp_type == 'center':
+                    foot = (cx, cy)
+                elif cp_type == 'top':
+                    foot = (cx, y1)
+                elif cp_type == 'mid-foot':
+                    foot = (cx, (cy + y2) // 2)
+                else:
+                    foot = (cx, y2)
 
                 # Distance from foot to the virtual line
                 dist = self._dist_to_line(foot, start, end)

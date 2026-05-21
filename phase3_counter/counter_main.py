@@ -273,6 +273,12 @@ def _camera_worker(cam_cfg: Dict,
     source    = cam_cfg.get('source', '')
     lines_cfg = cam_cfg.get('lines', [])
 
+    # ── Inherit crossing_point from camera (per-door can override) ──────────
+    cam_crossing_point = cam_cfg.get('crossing_point', 'foot')
+    for line in lines_cfg:
+        if 'crossing_point' not in line:
+            line['crossing_point'] = cam_crossing_point
+
     # ── Validate calibration ───────────────────────────────────────────────────
     crosser = DoorLineCrosser(lines_cfg)
     if not crosser.is_calibrated():
