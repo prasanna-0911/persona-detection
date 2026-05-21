@@ -598,14 +598,14 @@ def main():
     if args.calibrate:
         print("\n🔧 Starting line calibration tool...")
         from utils.line_calibrator import run_calibration
-        run_calibration(cfg_path, play_video=args.calib_vid)
+        run_calibration(cfg_path, play_video=True)
         return
 
     # ── Room Region calibration mode ───────────────────────────────────────────
     if args.calibrate_region:
         print("\n🗺️ Starting room region calibration tool...")
         from utils.room_region_calibrator import run_calibration as run_region_calibration
-        run_region_calibration(cfg_path, play_video=args.calib_region_vid)
+        run_region_calibration(cfg_path, play_video=True)
         return
 
     # ── Banner ─────────────────────────────────────────────────────────────────

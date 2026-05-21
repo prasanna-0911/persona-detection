@@ -84,12 +84,10 @@ You can use a room region polygon in two ways:
 
 **Calibration:**
 ```bash
-# Draw room region polygon
 python phase3_counter/counter_main.py --calibrate-region
-
-# With video playback during calibration
-python phase3_counter/counter_main.py --calibrate-region --calib-region-vid
 ```
+
+The video plays live during calibration. Press Spacebar to pause/resume.
 
 **Controls during calibration:**
 - Left Click: Add polygon point
@@ -97,7 +95,7 @@ python phase3_counter/counter_main.py --calibrate-region --calib-region-vid
 - 'c': Clear all points
 - 's': Save and move to next camera
 - 'q': Quit without saving
-- Spacebar: Play/pause video (video mode only)
+- Spacebar: Play/pause video
 
 After saving the polygon, you'll be prompted to choose a **crossing point** (see Crossing Point Configuration section).
 
@@ -169,13 +167,9 @@ Open `phase3_counter/config/counter_config.json` and configure:
 - `name`: Any label for log files
 
 ### Step 4: Calibrate virtual door lines (run once per setup)
-Run the calibration tool to draw the door boundaries interactively:
+Run the calibration tool to draw the door boundaries interactively (video plays live):
 ```bash
 python phase3_counter/counter_main.py --calibrate
-```
-To play the video while drawing lines (helps see where people actually walk):
-```bash
-python phase3_counter/counter_main.py --calibrate --calib-vid
 ```
 
 **What you do in the OpenCV window for each camera:**
@@ -189,7 +183,7 @@ python phase3_counter/counter_main.py --calibrate --calib-vid
 | Left Click | Place a point |
 | `s` | Save line for this camera |
 | `q` | Quit calibration (skip remaining cameras) |
-| Spacebar | Play/pause video (only with `--calib-vid`) |
+| Spacebar | Play/pause video |
 
 After saving, the coordinates are written back to `counter_config.json` automatically.
 
@@ -203,11 +197,8 @@ Two use cases:
 **B) As a standalone counter** — No door lines needed. The polygon itself becomes the counting boundary. People are counted as ENTRY when they enter the polygon and EXIT when they leave.
 
 ```bash
-# Draw polygon defining the room interior
+# Draw polygon defining the room interior (video plays live)
 python phase3_counter/counter_main.py --calibrate-region
-
-# With video playback during calibration
-python phase3_counter/counter_main.py --calibrate-region --calib-region-vid
 ```
 
 **What you do:**
@@ -223,7 +214,7 @@ python phase3_counter/counter_main.py --calibrate-region --calib-region-vid
 | `c` | Clear all points |
 | `s` | Save and move to next camera |
 | `q` | Quit without saving |
-| Spacebar | Play/pause video (video mode only) |
+| Spacebar | Play/pause video |
 
 ### Step 6: Run the counter
 ```bash
