@@ -130,8 +130,7 @@ class RoomRegionCalibrator:
 
         # Create window
         window_name = f"Room Region - {cam_name}"
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window_name, display_w, display_h)
+        cv2.namedWindow(window_name)
 
         # Try to fit window to screen
         screen_w = 1280
@@ -141,7 +140,6 @@ class RoomRegionCalibrator:
         scale = self.current_scale
         display_w = int(info['width'] * scale)
         display_h = int(info['height'] * scale)
-        cv2.resizeWindow(window_name, display_w, display_h)
 
         print(f"\n   📝 Draw polygon for room interior.")
         print(f"      Click points to define the room boundary.")
