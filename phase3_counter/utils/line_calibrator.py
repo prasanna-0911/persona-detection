@@ -198,10 +198,6 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
 
             print(f"\n   🚪  Defining line for: {door_name} ({door_id})")
 
-            window_name = f"Calibrate — {cam_name}"
-            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(window_name, new_w, new_h)
-
             # Dynamically get the Windows screen size to fit-to-screen perfectly
             try:
                 user32 = ctypes.windll.user32
@@ -222,6 +218,7 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
 
             # ── Interaction state ────────────────────────────────────────────
             state = {'step': 'pt1', 'pt1': None, 'pt2': None, 'inside_pt': None, 'scale': scale, 'pause_vid': False}
+            window_name = f"Calibrate — {cam_name} — {door_name}"
 
             def mouse_callback(event, x, y, flags, param):
                 # Only process LBUTTONDOWN — NOT LBUTTONUP.
