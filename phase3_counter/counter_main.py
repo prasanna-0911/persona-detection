@@ -421,20 +421,25 @@ def _camera_worker(cam_cfg: Dict,
                 ids   = results[0].boxes.id.int().cpu().tolist()
                 tracks = list(zip(ids, boxes))
 
-            # ── Filter tracks by room region (if defined) ─────────────────────
-            # This ensures we only count people inside the specified room polygon
-            if room_region is not None:
-                original_count = len(tracks)
-                tracks = room_region.filter_tracks(tracks)
-                # Debug info can be added here if needed
-
             # ── Compute movement direction for direction filtering ─────────────
             velocity_dict = {}
             if has_direction_filter:
                 velocity_dict = direction_tracker.update(tracks)
 
-            # ── Check line crossings ───────────────────────────────────────
+            # ── Check line crossings (all tracks, unfiltered) ───────────────
             events = crosser.update(tracks, velocity_dict=velocity_dict)
+
+            # ── Filter events by room region (if defined) ───────────────────
+            # An entry only counts if the person ends up inside the polygon;
+            # an exit only counts if the person ends up outside.
+            if room_region is not None:
+                events = [
+                    ev for ev in events
+                    if (ev['event'] == 'ENTRY' and
+                        room_region.is_point_inside(ev['foot'][0], ev['foot'][1])) or
+                       (ev['event'] == 'EXIT' and
+                        not room_region.is_point_inside(ev['foot'][0], ev['foot'][1]))
+                ]
 
             # ── Process events ─────────────────────────────────────────────
             now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
