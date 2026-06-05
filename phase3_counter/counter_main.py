@@ -291,7 +291,7 @@ def _camera_worker(cam_cfg: Dict,
                 room_region = RoomRegion(polygon, room_name=room_name)
                 print(f"   [{cam_name}] Room region: {len(polygon)}-point polygon")
         except Exception as e:
-            print(f"   [{cam_name}] ⚠️ Room region invalid: {e}")
+            print(f"   [{cam_name}] [WARN] Room region invalid: {e}")
 
     # ── Validate calibration ───────────────────────────────────────────────────
     crosser = DoorLineCrosser(lines_cfg)
@@ -300,7 +300,7 @@ def _camera_worker(cam_cfg: Dict,
             # No door lines, but room region exists — use polygon-based counting
             print(f"   [{cam_name}] No door lines — using room region polygon for counting")
         else:
-            print(f"\n⚠️  [{cam_name}] No door lines and no room region configured.")
+            print(f"\n[WARN]  [{cam_name}] No door lines and no room region configured.")
             print(f"    Either calibrate lines with:  python phase3_counter/counter_main.py --calibrate")
             print(f"    Or define a room region with:  python phase3_counter/counter_main.py --calibrate-region")
             print(f"    Skipping {cam_name}.\n")
@@ -320,11 +320,11 @@ def _camera_worker(cam_cfg: Dict,
     # ── Open video source ──────────────────────────────────────────────────────
     vs = VideoSource(source)
     if not vs.open():
-        print(f"❌ [{cam_name}] Cannot open source: {source}")
+        print(f"[ERR] [{cam_name}] Cannot open source: {source}")
         return
 
     info = vs.get_info()
-    print(f"✅ [{cam_name}] {info['width']}x{info['height']} "
+    print(f"[OK] [{cam_name}] {info['width']}x{info['height']} "
           f"@ {info['fps']:.1f}fps  |  "
           f"{'RTSP stream' if info['is_stream'] else 'Video file'}")
 
@@ -352,9 +352,9 @@ def _camera_worker(cam_cfg: Dict,
         out_writer = cv2.VideoWriter(out_path, fourcc, out_fps,
                                      (info['width'], info['height']))
         if out_writer.isOpened():
-            print(f"   [{cam_name}] 💾 Saving output  →  {out_path}")
+            print(f"   [{cam_name}] [SAVE] Saving output  ->  {out_path}")
         else:
-            print(f"   [{cam_name}] ⚠️  VideoWriter failed. Output will not be saved.")
+            print(f"   [{cam_name}] [WARN]  VideoWriter failed. Output will not be saved.")
             out_writer = None
 
     # ── Headless mode: print VLC instructions ──────────────────────────────────
@@ -378,7 +378,7 @@ def _camera_worker(cam_cfg: Dict,
     frame_count = 0
 
     mode_label = 'headless → VLC' if not display else 'live window'
-    print(f"🎬 [{cam_name}] Starting ({mode_label}) ... "
+    print(f"[START] [{cam_name}] Starting ({mode_label}) ... "
           f"{'Press Ctrl+C to stop' if not display else 'press q or Ctrl+C'}")
 
     # ── tqdm progress bar (only in headless mode; hidden when window is shown) ──
@@ -490,7 +490,7 @@ def _camera_worker(cam_cfg: Dict,
                     'occupancy_after': snap['current_occupancy'],
                 })
                 recent_events.append((ev, time.time()))
-                icon = '🟢' if ev['event'] == 'ENTRY' else '🔴'
+                icon = '[GREEN]' if ev['event'] == 'ENTRY' else '[RED]'
                 print(f"  {icon} [{cam_name}] {ev['event']:5s}  "
                       f"{ev['door_name']}  "
                       f"| Occupancy: {snap['current_occupancy']}")
@@ -506,7 +506,7 @@ def _camera_worker(cam_cfg: Dict,
                 cv2.imshow(cam_name, annotated)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
-                    print(f"\n   [{cam_name}] 'q' pressed — stopping all cameras.")
+                    print(f"\n   [{cam_name}] 'q' pressed - stopping all cameras.")
                     _STOP_EVENT.set()
                     break
 
@@ -537,9 +537,9 @@ def _camera_worker(cam_cfg: Dict,
             out_writer.release()
         if display:
             cv2.destroyWindow(cam_name)
-        print(f"✅ [{cam_name}] Stopped after {frame_count} frames.")
+        print(f"[OK] [{cam_name}] Stopped after {frame_count} frames.")
         if not display and out_path:
-            print(f"   📂 Output saved: {out_path}  ← open this in VLC")
+            print(f"   [FILE] Output saved: {out_path}  <- open this in VLC")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -587,30 +587,36 @@ def main():
     # ── Load config ────────────────────────────────────────────────────────────
     cfg_path = os.path.abspath(args.config)
     if not os.path.isfile(cfg_path):
-        print(f"❌ Config file not found: {cfg_path}")
+        print(f"[ERR] Config file not found: {cfg_path}")
         print("   Default: phase3_counter/config/counter_config.json")
         sys.exit(1)
 
     with open(cfg_path, 'r', encoding='utf-8') as f:
         cfg = json.load(f)
 
+    # Normalize Windows backslashes in source paths to forward slashes (for Linux/Colab)
+    for cam in cfg.get('cameras', []):
+        src = cam.get('source', '')
+        if src:
+            cam['source'] = src.replace('\\', '/')
+
     # ── Calibration mode ───────────────────────────────────────────────────────
     if args.calibrate:
-        print("\n🔧 Starting line calibration tool...")
+        print("\n[TOOL] Starting line calibration tool...")
         from utils.line_calibrator import run_calibration
         run_calibration(cfg_path, play_video=True)
         return
 
     # ── Room Region calibration mode ───────────────────────────────────────────
     if args.calibrate_region:
-        print("\n🗺️ Starting room region calibration tool...")
+        print("\n[MAP] Starting room region calibration tool...")
         from utils.room_region_calibrator import run_calibration as run_region_calibration
         run_region_calibration(cfg_path, play_video=True)
         return
 
     # ── Banner ─────────────────────────────────────────────────────────────────
     print("\n" + "=" * 65)
-    print("🚪  ROOM OCCUPANCY COUNTER")
+    print("[DOOR]  ROOM OCCUPANCY COUNTER")
     print(f"    Room    : {cfg.get('room_name', 'N/A')}")
     print(f"    Config  : {cfg_path}")
     print(f"    Cameras : {len(cfg.get('cameras', []))}")
@@ -633,7 +639,7 @@ def main():
     cameras     = cfg.get('cameras', [])
 
     if not cameras:
-        print("❌ No cameras defined in config. Nothing to do.")
+        print("[ERR] No cameras defined in config. Nothing to do.")
         sys.exit(1)
 
     # ── Shared components ──────────────────────────────────────────────────────
@@ -641,7 +647,7 @@ def main():
     logger     = EventLogger(log_dir=log_dir, flush_every=flush_every)
 
     if args.initial_count > 0:
-        print(f"\nℹ️  Initial occupancy seeded to {args.initial_count} "
+        print(f"\n[INFO]  Initial occupancy seeded to {args.initial_count} "
               f"(mid-day startup mode).")
 
     # ── Launch one thread per camera ───────────────────────────────────────────
@@ -670,7 +676,7 @@ def main():
         threads.append(t)
         t.start()
 
-    print(f"\n🎬 {len(threads)} camera thread(s) running.  "
+    print(f"\n[START] {len(threads)} camera thread(s) running.  "
           f"Press Ctrl+C or 'q' in any window to stop.\n")
 
     # ── Wait for all threads to finish ─────────────────────────────────────────
@@ -679,15 +685,15 @@ def main():
             while t.is_alive():
                 t.join(timeout=1.0)   # 1s timeout so Ctrl+C is responsive
     except KeyboardInterrupt:
-        print("\n\n🛑 Ctrl+C — stopping all cameras...")
+        print("\n\n[STOP] Ctrl+C - stopping all cameras...")
         _STOP_EVENT.set()
         for t in threads:
             t.join(timeout=10.0)
-        print("✅ All camera threads stopped.")
+        print("[OK] All camera threads stopped.")
 
     # ── Shutdown: flush logger + write session summary ─────────────────────────
     print("\n" + "=" * 65)
-    print("📊 FINAL SESSION SUMMARY")
+    print("[STATS] FINAL SESSION SUMMARY")
     print("=" * 65)
 
     summary = aggregator.get_session_summary()
@@ -706,7 +712,7 @@ def main():
     logger.write_session_summary({**summary, 'room_name': cfg.get('room_name', 'N/A')})
     logger.close()
 
-    print("\n✅ Done.\n")
+    print("\n[OK] Done.\n")
 
 
 if __name__ == '__main__':

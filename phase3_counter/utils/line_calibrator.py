@@ -26,6 +26,7 @@ import os
 import sys
 import json
 import copy
+import msvcrt
 import cv2
 import ctypes
 import numpy as np
@@ -37,6 +38,27 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 from multi_camera_tracker import VideoSource   # read-only import; file unchanged
+
+
+def _win_prompt(prompt_text: str) -> str:
+    sys.stdout.write(prompt_text)
+    sys.stdout.flush()
+    chars = []
+    while True:
+        ch = msvcrt.getwch()
+        if ch == '\r':
+            sys.stdout.write('\n')
+            sys.stdout.flush()
+            return ''.join(chars)
+        if ch == '\b':
+            if chars:
+                chars.pop()
+                sys.stdout.write('\b \b')
+                sys.stdout.flush()
+        else:
+            chars.append(ch)
+            sys.stdout.write(ch)
+            sys.stdout.flush()
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -168,12 +190,12 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
         source    = cam_cfg.get('source', '')
         lines_cfg = cam_cfg.get('lines', [])
 
-        print(f"\n📷  Calibrating {cam_name}  ({source})")
+        print(f"\n[CAM]  Calibrating {cam_name}  ({source})")
 
         # ── Grab a reference frame ──────────────────────────────────────────
         vs = VideoSource(source)
         if not vs.open():
-            print(f"   ❌ Cannot open source. Skipping {cam_name}.")
+            print(f"   [ERR] Cannot open source. Skipping {cam_name}.")
             continue
 
         # Try up to 30 frames to get a non-empty frame
@@ -188,7 +210,7 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
             vs.release()
 
         if canvas is None:
-            print(f"   ❌ Could not read a frame from {cam_name}. Skipping.")
+            print(f"   [ERR] Could not read a frame from {cam_name}. Skipping.")
             if play_video: vs.release()
             continue
 
@@ -199,7 +221,7 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
             door_id   = line_cfg.get('door_id',   f'Door_{line_idx + 1}')
             door_name = line_cfg.get('door_name', door_id)
 
-            print(f"\n   🚪  Defining line for: {door_name} ({door_id})")
+            print(f"\n   [DOOR]  Defining line for: {door_name} ({door_id})")
 
             # Dynamically get the Windows screen size to fit-to-screen perfectly
             try:
@@ -221,7 +243,7 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
 
             # ── Interaction state ────────────────────────────────────────────
             state = {'step': 'pt1', 'pt1': None, 'pt2': None, 'inside_pt': None, 'scale': scale, 'pause_vid': False}
-            window_name = f"Calibrate — {cam_name} — {door_name}"
+            window_name = f"Calibrate - {cam_name} - {door_name}"
 
             def mouse_callback(event, x, y, flags, param):
                 # Only process LBUTTONDOWN — NOT LBUTTONUP.
@@ -235,26 +257,26 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
                     s['pt1'] = (orig_x, orig_y)
                     s['step'] = 'pt2'
                     s['pause_vid'] = True  # Auto-pause video after 1st click for stability
-                    print(f"   ✔  Point 1 set at {(orig_x, orig_y)} — now click Point 2")
+                    print(f"   [OK]  Point 1 set at {(orig_x, orig_y)} - now click Point 2")
 
                 elif s['step'] == 'pt2':
                     s['pt2'] = (orig_x, orig_y)
                     if s['pt1'] == s['pt2']:
-                        print("   ⚠️  Both points are the same. Click a different location.")
+                        print("   [WARN]  Both points are the same. Click a different location.")
                         s['step'] = 'pt2'
                     else:
                         s['step'] = 'inside'
-                        print(f"   ✔  Point 2 set at {(orig_x, orig_y)} — now click INSIDE the room")
+                        print(f"   [OK]  Point 2 set at {(orig_x, orig_y)} - now click INSIDE the room")
 
                 elif s['step'] == 'inside':
                     sign = _cross_sign((orig_x, orig_y), s['pt1'], s['pt2'])
                     if sign == 0:
-                        print("   ⚠️  Click is exactly on the line. Click clearly inside the room.")
+                        print("   [WARN]  Click is exactly on the line. Click clearly inside the room.")
                         return
                     s['inside_pt']   = (orig_x, orig_y)
                     s['inside_sign'] = sign
                     s['step']        = 'done'
-                    print(f"   ✔  Inside point set at {(orig_x, orig_y)} — press [s] to save")
+                    print(f"   [OK]  Inside point set at {(orig_x, orig_y)} - press [s] to save")
 
             # ── Interaction loop ─────────────────────────────────────────────
             quit_all = False
@@ -264,7 +286,7 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
             cv2.waitKey(200)          # let the window fully appear + gain focus
             cv2.setMouseCallback(window_name, mouse_callback, state)
             
-            help_msg = "   👆  Window ready. Click in the window to begin."
+            help_msg = "   [CLICK]  Window ready. Click in the window to begin."
             if play_video:
                 help_msg += "  (Press [SPACE] to pause/play video anytime)"
             print(help_msg)
@@ -284,59 +306,61 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
                     # Reset this line
                     state.update({'step': 'pt1', 'pt1': None, 'pt2': None,
                                   'inside_pt': None, 'pause_vid': False})
-                    print("   🔄  Reset. Start over for this line.")
+                    print("   [RESET]  Reset. Start over for this line.")
 
                 elif key == ord(' '):
                     state['pause_vid'] = not state.get('pause_vid', False)
-                    print(f"   ⏯️  Video {'paused' if state.get('pause_vid') else 'playing'}.")
+                    print(f"   [VIDEO]  Video {'paused' if state.get('pause_vid') else 'playing'}.")
 
                 elif key == ord('s') and state['step'] == 'done':
                     # Save to config
                     line_cfg['start']       = list(state['pt1'])
                     line_cfg['end']         = list(state['pt2'])
                     line_cfg['inside_sign'] = state['inside_sign']
-                    print(f"   ✅  Saved: start={state['pt1']}  "
+                    print(f"   [OK]  Saved: start={state['pt1']}  "
                           f"end={state['pt2']}  inside_sign={state['inside_sign']}")
                     any_saved = True
                     break
 
                 elif key == ord('s') and state['step'] != 'done':
-                    print("   ⚠️  Complete all 3 steps before pressing [s].")
+                    print("   [WARN]  Complete all 3 steps before pressing [s].")
 
                 elif key == ord('q'):
-                    print("\n   ⛔  Calibration quit by user.")
+                    print("\n   [QUIT]  Calibration quit by user.")
                     quit_all = True
                     break
 
-            cv2.destroyWindow(window_name)
+            cv2.destroyAllWindows()
 
             if quit_all:
+                cv2.destroyAllWindows()
                 # Write whatever was saved so far
                 with open(config_path, 'w', encoding='utf-8') as f:
                     json.dump(cfg, f, indent=2, ensure_ascii=False)
-                print(f"\n📁 Config saved (partial): {config_path}")
+                print(f"\n[SAVE] Config saved (partial): {config_path}")
                 if play_video: vs.release()
                 return False
 
         # ── Prompt for crossing point (once per camera) ─────────────────
         valid_options = {'foot', 'center', 'top', 'mid-foot'}
-        prompt = (f"\n   🎯  Crossing point for {cam_name}"
-                  f" (foot/center/top/mid-foot) [foot]: ")
         while True:
             try:
-                cp_input = input(prompt).strip().lower()
+                cp_input = _win_prompt(
+                    f"\n   [INPUT]  Crossing point for {cam_name}"
+                    f" (foot/center/top/mid-foot) [foot]: "
+                ).strip().lower()
                 if not cp_input:
                     cp_input = 'foot'
                 if cp_input in valid_options:
                     cam_cfg['crossing_point'] = cp_input
-                    print(f"   ✅  Crossing point set to: {cp_input}")
+                    print(f"   [OK]  Crossing point set to: {cp_input}")
                     break
                 else:
-                    print(f"   ⚠️  Invalid option '{cp_input}'. "
+                    print(f"   [WARN]  Invalid option '{cp_input}'. "
                           f"Choose from: foot, center, top, mid-foot")
             except (EOFError, KeyboardInterrupt):
                 cam_cfg['crossing_point'] = 'foot'
-                print("\n   ⚠️  Defaulting to: foot")
+                print("\n   [WARN]  Defaulting to: foot")
                 break
 
         # ── Prompt for crossing mode (once per camera) ──────────────────
@@ -347,23 +371,24 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
             for l in current_lines
         )
         default_mode = 'line' if has_active_lines else 'region'
-        mode_prompt = (f"\n   🎯  Crossing mode for {cam_name}"
-                       f" (line/region/both) [{default_mode}]: ")
         while True:
             try:
-                cm_input = input(mode_prompt).strip().lower()
+                cm_input = _win_prompt(
+                    f"\n   [INPUT]  Crossing mode for {cam_name}"
+                    f" (line/region/both) [{default_mode}]: "
+                ).strip().lower()
                 if not cm_input:
                     cm_input = default_mode
                 if cm_input in valid_modes:
                     cam_cfg['crossing_mode'] = cm_input
-                    print(f"   ✅  Crossing mode set to: {cm_input}")
+                    print(f"   [OK]  Crossing mode set to: {cm_input}")
                     break
                 else:
-                    print(f"   ⚠️  Invalid option '{cm_input}'. "
+                    print(f"   [WARN]  Invalid option '{cm_input}'. "
                           f"Choose from: line, region, both")
             except (EOFError, KeyboardInterrupt):
                 cam_cfg['crossing_mode'] = default_mode
-                print(f"\n   ⚠️  Defaulting to: {default_mode}")
+                print(f"\n   [WARN]  Defaulting to: {default_mode}")
                 break
 
         if play_video:
@@ -373,6 +398,7 @@ def run_calibration(config_path: str, play_video: bool = False) -> bool:
     with open(config_path, 'w', encoding='utf-8') as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
 
-    print(f"\n✅  Calibration complete! Config saved: {config_path}")
+    print(f"\n[OK]  Calibration complete! Config saved: {config_path}")
+    cv2.destroyAllWindows()
     print("    You can now run: python phase3_counter/counter_main.py")
     return any_saved

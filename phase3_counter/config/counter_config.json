@@ -15,19 +15,19 @@
   "cameras": [
     {
       "name": "Camera_1",
-      "source": "Untitled design.mp4",
+      "source": "phase3_counter\\test_footage\\ABC.mp4",
       "_source_note": "Replace with RTSP URL, e.g. rtsp://admin:pass@192.168.1.100:554/Streaming/Channels/101",
       "lines": [
         {
           "door_id": "Door_A",
           "door_name": "Main Entrance",
           "start": [
-            68,
-            623
+            121,
+            49
           ],
           "end": [
-            577,
-            1015
+            265,
+            976
           ],
           "_calibration_note": "These coordinates are placeholders. Run: python phase3_counter/counter_main.py --calibrate",
           "inside_sign": -1,
@@ -39,27 +39,49 @@
       "room_region": {
         "polygon": [
           [
-            73,
-            576
+            101,
+            386
           ],
           [
-            283,
-            1068
+            309,
+            1070
           ],
           [
-            1209,
-            1065
+            1483,
+            1067
           ],
           [
-            1669,
-            378
+            1786,
+            435
           ],
           [
-            1098,
-            141
+            1468,
+            238
+          ],
+          [
+            1226,
+            371
+          ],
+          [
+            1067,
+            305
+          ],
+          [
+            1178,
+            125
+          ],
+          [
+            1092,
+            82
+          ],
+          [
+            91,
+            314
           ]
         ]
-      }
+      },
+      "crossing_point": "center",
+      "crossing_mode": "region"
     }
   ]
 }

@@ -19,10 +19,32 @@ Controls:
 import os
 import sys
 import json
+import msvcrt
 import cv2
 import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
+
+
+def _win_prompt(prompt_text: str) -> str:
+    sys.stdout.write(prompt_text)
+    sys.stdout.flush()
+    chars = []
+    while True:
+        ch = msvcrt.getwch()
+        if ch == '\r':
+            sys.stdout.write('\n')
+            sys.stdout.flush()
+            return ''.join(chars)
+        if ch == '\b':
+            if chars:
+                chars.pop()
+                sys.stdout.write('\b \b')
+                sys.stdout.flush()
+        else:
+            chars.append(ch)
+            sys.stdout.write(ch)
+            sys.stdout.flush()
 
 # Add parent directories to path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -57,7 +79,7 @@ class RoomRegionCalibrator:
         self.cameras = self.config.get('cameras', [])
 
         if not self.cameras:
-            print("❌ No cameras defined in config.")
+            print("[ERR] No cameras defined in config.")
             sys.exit(1)
 
         # State
@@ -80,7 +102,7 @@ class RoomRegionCalibrator:
     def run(self):
         """Run the calibration for all cameras."""
         print("\n" + "=" * 60)
-        print("🖊️  ROOM REGION CALIBRATOR")
+        print("[DRAW]  ROOM REGION CALIBRATOR")
         print("=" * 60)
         print("\nInstructions:")
         print("  • Left Click  : Add polygon point")
@@ -109,7 +131,7 @@ class RoomRegionCalibrator:
         cam_name = cam.get('name', f'Camera_{cam_idx + 1}')
         source = cam.get('source', '')
 
-        print(f"\n📷 Camera: {cam_name}")
+        print(f"\n[CAM] Camera: {cam_name}")
         print(f"   Source: {source}")
 
         # Initialize polygon for this camera
@@ -121,7 +143,7 @@ class RoomRegionCalibrator:
         # Open video source
         vs = VideoSource(source)
         if not vs.open():
-            print(f"   ❌ Cannot open source: {source}")
+            print(f"   [ERR] Cannot open source: {source}")
             return
 
         info = vs.get_info()
@@ -141,7 +163,7 @@ class RoomRegionCalibrator:
         display_w = int(info['width'] * scale)
         display_h = int(info['height'] * scale)
 
-        print(f"\n   📝 Draw polygon for room interior.")
+        print(f"\n   [DRAW] Draw polygon for room interior.")
         print(f"      Click points to define the room boundary.")
         print(f"      Press 's' to save when done.")
 
@@ -215,27 +237,27 @@ class RoomRegionCalibrator:
 
             # Handle keys
             if key == ord('q'):
-                print(f"\n   ❌ Calibration cancelled for {cam_name}")
+                print(f"\n   [ERR] Calibration cancelled for {cam_name}")
                 vs.release()
                 cv2.destroyWindow(window_name)
                 return
 
             elif key == ord('s'):
-                print(f"   ✅ Saved {len(points)} points for {cam_name}")
+                print(f"   [OK] Saved {len(points)} points for {cam_name}")
                 break
 
             elif key == ord('u'):
                 if points:
                     points.pop()
-                    print(f"   ↩️  Undo - {len(points)} points remaining")
+                    print(f"   [UNDO]  Undo - {len(points)} points remaining")
 
             elif key == ord('c'):
                 points.clear()
-                print(f"   🗑️  Cleared all points")
+                print(f"   [CLEAR]  Cleared all points")
 
             elif key == ord(' ') and info['is_stream']:
                 playing = not playing
-                print(f"   {'▶️' if playing else '⏸️'} {'Playing' if playing else 'Paused'}")
+                print(f"   {'[PLAY]' if playing else '[PAUSE]'} {'Playing' if playing else 'Paused'}")
 
         vs.release()
         cv2.destroyWindow(window_name)
@@ -246,23 +268,24 @@ class RoomRegionCalibrator:
         # ── Prompt for crossing point ────────────────────────────────────
         if len(points) >= 3:
             valid_options = {'foot', 'center', 'top', 'mid-foot'}
-            prompt_text = (f"\n   🎯  Crossing point for {cam_name}"
-                          f" (foot/center/top/mid-foot) [foot]: ")
             while True:
                 try:
-                    cp_input = input(prompt_text).strip().lower()
+                    cp_input = _win_prompt(
+                        f"\n   [INPUT]  Crossing point for {cam_name}"
+                        f" (foot/center/top/mid-foot) [foot]: "
+                    ).strip().lower()
                     if not cp_input:
                         cp_input = 'foot'
                     if cp_input in valid_options:
                         self._crossing_points[cam_name] = cp_input
-                        print(f"   ✅  Crossing point set to: {cp_input}")
+                        print(f"   [OK]  Crossing point set to: {cp_input}")
                         break
                     else:
-                        print(f"   ⚠️  Invalid option '{cp_input}'. "
+                        print(f"   [WARN]  Invalid option '{cp_input}'. "
                              f"Choose from: foot, center, top, mid-foot")
                 except (EOFError, KeyboardInterrupt):
                     self._crossing_points[cam_name] = 'foot'
-                    print("\n   ⚠️  Defaulting to: foot")
+                    print("\n   [WARN]  Defaulting to: foot")
                     break
 
         # ── Prompt for crossing mode ────────────────────────────────────
@@ -274,23 +297,24 @@ class RoomRegionCalibrator:
                 for l in lines_cfg
             ) if lines_cfg else False
             default_mode = 'line' if has_active_lines else 'region'
-            mode_prompt = (f"\n   🎯  Crossing mode for {cam_name}"
-                           f" (line/region/both) [{default_mode}]: ")
             while True:
                 try:
-                    cm_input = input(mode_prompt).strip().lower()
+                    cm_input = _win_prompt(
+                        f"\n   [INPUT]  Crossing mode for {cam_name}"
+                        f" (line/region/both) [{default_mode}]: "
+                    ).strip().lower()
                     if not cm_input:
                         cm_input = default_mode
                     if cm_input in valid_modes:
                         self._crossing_modes[cam_name] = cm_input
-                        print(f"   ✅  Crossing mode set to: {cm_input}")
+                        print(f"   [OK]  Crossing mode set to: {cm_input}")
                         break
                     else:
-                        print(f"   ⚠️  Invalid option '{cm_input}'. "
+                        print(f"   [WARN]  Invalid option '{cm_input}'. "
                               f"Choose from: line, region, both")
                 except (EOFError, KeyboardInterrupt):
                     self._crossing_modes[cam_name] = default_mode
-                    print(f"\n   ⚠️  Defaulting to: {default_mode}")
+                    print(f"\n   [WARN]  Defaulting to: {default_mode}")
                     break
 
     def _add_point(self, cam_name: str, point: Tuple[int, int]):
@@ -326,14 +350,14 @@ class RoomRegionCalibrator:
             json.dump(self.config, f, indent=2)
 
         print("\n" + "=" * 60)
-        print("💾 Configuration saved!")
+        print("[SAVE] Configuration saved!")
         print("=" * 60)
 
         for cam_name, points in self.polygons.items():
             if len(points) >= 3:
-                print(f"   ✅ {cam_name}: {len(points)} points")
+                print(f"   [OK] {cam_name}: {len(points)} points")
             else:
-                print(f"   ⚠️ {cam_name}: Not configured (need 3+ points)")
+                print(f"   [WARN] {cam_name}: Not configured (need 3+ points)")
 
 
 def run_calibration(config_path: str = None, play_video: bool = False):
