@@ -15,6 +15,50 @@ Note: Zero existing project files are modified. All new code lives in the phase3
 
 ---
 
+## Quick Start
+
+### 1. Create and activate environment
+```bash
+# Windows
+python -m venv venv
+venv\Scripts\activate
+
+# Linux / Colab
+python -m venv venv
+source venv/bin/activate
+```
+
+### 2. Install dependencies
+```bash
+pip install torch torchvision ultralytics opencv-python numpy scipy tqdm
+```
+
+### 3. Calibrate door lines (one-time setup)
+```bash
+python phase3_counter/counter_main.py --calibrate
+```
+Opens an interactive window — click 2 points for the door line, then 1 point inside the room. Press `s` to save.
+
+### 4. Run the counter
+```bash
+# Full run with live display
+python phase3_counter/counter_main.py
+
+# Headless (no windows) — useful for Colab / servers
+python phase3_counter/counter_main.py --no-display --max-frames 500
+```
+
+### For Google Colab
+```python
+!git clone https://github.com/prasanna-0911/persona-detection
+%cd persona-detection
+!pip install torch torchvision ultralytics opencv-python-headless numpy scipy tqdm
+!python phase3_counter/counter_main.py --no-display
+```
+> Calibration must be done locally first (Colab has no GUI). Run `--calibrate` on your Windows machine, then upload the config to Colab.
+
+---
+
 ## Folder Structure
 
 ```text
